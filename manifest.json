@@ -9,6 +9,14 @@
         "imageUrl": "https://raw.githubusercontent.com/HarshLabs/jellyfin-plugin-youtube-trailers/main/assets/icon.png",
         "versions": [
             {
+                "version": "1.1.0.0",
+                "changelog": "The plugin now downloads and maintains its own official yt-dlp standalone binary for your server's OS/architecture (Linux x64/arm64/armv7, macOS, Windows) \u2014 no manual install and no Python required, so it works out of the box. Set a yt-dlp path only to pin a system copy. Config page adds a \"Download / update yt-dlp\" button and shows the detected version.\n",
+                "targetAbi": "10.11.0.0",
+                "sourceUrl": "https://github.com/HarshLabs/jellyfin-plugin-youtube-trailers/releases/download/v1.1.0.0/youtube-trailers_1.1.0.0.zip",
+                "checksum": "cce094a57738d32af121912e5617958d",
+                "timestamp": "2026-06-18T21:58:01Z"
+            },
+            {
                 "version": "1.0.0.0",
                 "changelog": "Server-side YouTube trailer resolution (yt-dlp) stream-copy remuxed to AVPlayer-native fMP4 HLS, for in-app trailers and the Top Shelf \u2014 zero on-device extraction. Dashboard config page (tool paths, format selector, extra yt-dlp arguments, cache directory, yt-dlp version) and a daily prune task that bounds the cache by age and LRU size.\n",
                 "targetAbi": "10.11.0.0",
