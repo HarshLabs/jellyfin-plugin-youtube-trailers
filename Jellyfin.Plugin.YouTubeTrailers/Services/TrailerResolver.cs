@@ -33,6 +33,7 @@ public sealed class TrailerResolver
     private readonly ILogger<TrailerResolver> _logger;
     private readonly IMediaEncoder _mediaEncoder;
     private readonly IApplicationPaths _appPaths;
+    private readonly YtDlpManager _ytDlp;
 
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _gates = new();
     private readonly ConcurrentDictionary<string, TrailerJob> _jobs = new();
@@ -40,11 +41,12 @@ public sealed class TrailerResolver
     // Sized from MaxConcurrentBuilds at construction (restart to change).
     private readonly SemaphoreSlim _startSlots;
 
-    public TrailerResolver(ILogger<TrailerResolver> logger, IMediaEncoder mediaEncoder, IApplicationPaths appPaths)
+    public TrailerResolver(ILogger<TrailerResolver> logger, IMediaEncoder mediaEncoder, IApplicationPaths appPaths, YtDlpManager ytDlp)
     {
         _logger = logger;
         _mediaEncoder = mediaEncoder;
         _appPaths = appPaths;
+        _ytDlp = ytDlp;
         var maxConcurrent = Math.Clamp(Plugin.Instance?.Configuration.MaxConcurrentBuilds ?? 4, 1, 16);
         _startSlots = new SemaphoreSlim(maxConcurrent, maxConcurrent);
     }
@@ -189,8 +191,8 @@ public sealed class TrailerResolver
     /// </summary>
     public async Task<string> YtDlpVersionAsync(CancellationToken ct)
     {
-        var ytDlp = Plugin.Instance?.Configuration.YtDlpPath;
-        if (string.IsNullOrWhiteSpace(ytDlp) || !File.Exists(ytDlp))
+        var ytDlp = _ytDlp.Resolve();
+        if (ytDlp is null)
         {
             return "not found";
         }
@@ -401,10 +403,10 @@ public sealed class TrailerResolver
 
     private async Task<string[]?> ResolveUrlsAsync(string videoId, PluginConfiguration cfg, CancellationToken ct)
     {
-        var ytDlp = cfg.YtDlpPath;
-        if (string.IsNullOrWhiteSpace(ytDlp) || !File.Exists(ytDlp))
+        var ytDlp = _ytDlp.Resolve();
+        if (ytDlp is null)
         {
-            _logger.LogError("[YouTubeTrailers] yt-dlp not found at '{Path}'", ytDlp);
+            _logger.LogError("[YouTubeTrailers] no usable yt-dlp (configured path missing and managed binary not installed)");
             return null;
         }
 

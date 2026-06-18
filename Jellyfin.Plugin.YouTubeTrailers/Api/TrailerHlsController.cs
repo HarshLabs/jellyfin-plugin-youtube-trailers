@@ -15,11 +15,13 @@ namespace Jellyfin.Plugin.YouTubeTrailers.Api;
 public sealed class TrailerHlsController : ControllerBase
 {
     private readonly TrailerResolver _resolver;
+    private readonly YtDlpManager _ytDlp;
     private readonly ILogger<TrailerHlsController> _logger;
 
-    public TrailerHlsController(TrailerResolver resolver, ILogger<TrailerHlsController> logger)
+    public TrailerHlsController(TrailerResolver resolver, YtDlpManager ytDlp, ILogger<TrailerHlsController> logger)
     {
         _resolver = resolver;
+        _ytDlp = ytDlp;
         _logger = logger;
     }
 
@@ -164,7 +166,20 @@ public sealed class TrailerHlsController : ControllerBase
     public async Task<IActionResult> ToolVersion(CancellationToken cancellationToken)
     {
         var version = await _resolver.YtDlpVersionAsync(cancellationToken).ConfigureAwait(false);
-        return Ok(new { ytDlp = version });
+        return Ok(new { ytDlp = version, managed = !_ytDlp.UsingConfigured });
+    }
+
+    /// <summary>
+    /// Downloads / updates the plugin-managed yt-dlp binary (admin config page
+    /// button). Returns the new version on success.
+    /// </summary>
+    [HttpPost("admin/ytdlp/update")]
+    [Authorize(Policy = "RequiresElevation")]
+    public async Task<IActionResult> UpdateYtDlp(CancellationToken cancellationToken)
+    {
+        var (ok, message) = await _ytDlp.DownloadAsync(cancellationToken).ConfigureAwait(false);
+        var version = ok ? await _resolver.YtDlpVersionAsync(cancellationToken).ConfigureAwait(false) : "error";
+        return Ok(new { ok, message, version });
     }
 
     private static string ExtractToken(HttpRequest request)

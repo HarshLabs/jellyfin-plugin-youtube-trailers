@@ -16,8 +16,19 @@ public class PluginConfiguration : BasePluginConfiguration
 {
     public bool Enabled { get; set; } = true;
 
-    /// <summary>Absolute path to the yt-dlp binary on the server host.</summary>
-    public string YtDlpPath { get; set; } = "/opt/homebrew/bin/yt-dlp";
+    /// <summary>
+    /// When true (default), the plugin downloads and maintains its own yt-dlp
+    /// standalone binary (no manual install / Python needed) under its data
+    /// folder. A non-empty <see cref="YtDlpPath"/> that exists always overrides.
+    /// </summary>
+    public bool ManageYtDlp { get; set; } = true;
+
+    /// <summary>
+    /// Absolute path to a system yt-dlp binary. Leave blank to use the
+    /// plugin-managed binary (recommended). When set and present, it overrides
+    /// the managed one.
+    /// </summary>
+    public string YtDlpPath { get; set; } = string.Empty;
 
     /// <summary>
     /// Override path to ffmpeg. Empty = use the server's bundled ffmpeg
@@ -99,7 +110,9 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
 {
     public void RegisterServices(IServiceCollection serviceCollection, IServerApplicationHost applicationHost)
     {
+        serviceCollection.AddSingleton<YtDlpManager>();
         serviceCollection.AddSingleton<TrailerResolver>();
         serviceCollection.AddSingleton<IScheduledTask, Tasks.PruneCacheTask>();
+        serviceCollection.AddHostedService<YtDlpBootstrapService>();
     }
 }

@@ -16,9 +16,21 @@
                     <div class="fieldDescription">Resolve YouTube trailers server-side and serve them as AVPlayer-native HLS.</div>
                 </div>
 
+                <div class="checkboxContainer checkboxContainer-withDescription">
+                    <label>
+                        <input is="emby-checkbox" type="checkbox" id="ManageYtDlp" />
+                        <span>Manage yt-dlp automatically</span>
+                    </label>
+                    <div class="fieldDescription">The plugin downloads and maintains its own yt-dlp standalone binary for this server's OS — no manual install or Python needed. <strong id="YtDlpVersion">Detected version: …</strong></div>
+                </div>
+
+                <div style="display:flex; gap:1em; margin-bottom:1.5em;">
+                    <button is="emby-button" type="button" id="UpdateYtDlp" class="raised button-cancel"><span>Download / update yt-dlp now</span></button>
+                </div>
+
                 <div class="inputContainer">
-                    <input is="emby-input" type="text" id="YtDlpPath" label="yt-dlp path" />
-                    <div class="fieldDescription">Absolute path to the yt-dlp binary on this server. <strong id="YtDlpVersion">Detected version: …</strong> — keep yt-dlp updated; YouTube changes periodically break extraction.</div>
+                    <input is="emby-input" type="text" id="YtDlpPath" label="yt-dlp path (optional)" />
+                    <div class="fieldDescription">Leave blank to use the managed binary. Set this only to pin a specific system yt-dlp — when it exists, it overrides the managed one. (Keep yt-dlp updated; YouTube changes periodically break extraction.)</div>
                 </div>
 
                 <div class="inputContainer">
@@ -106,6 +118,7 @@
                 Dashboard.showLoadingMsg();
                 ApiClient.getPluginConfiguration(pluginId).then(function (config) {
                     page.querySelector("#Enabled").checked = config.Enabled;
+                    page.querySelector("#ManageYtDlp").checked = config.ManageYtDlp;
                     page.querySelector("#YtDlpPath").value = config.YtDlpPath || "";
                     page.querySelector("#FfmpegPath").value = config.FfmpegPath || "";
                     page.querySelector("#CacheDirectory").value = config.CacheDirectory || "";
@@ -123,6 +136,21 @@
 
             document.querySelector("#RefreshStats").addEventListener("click", function () {
                 loadStats(document.querySelector("#YouTubeTrailersConfigPage"));
+            });
+
+            document.querySelector("#UpdateYtDlp").addEventListener("click", function () {
+                var page = document.querySelector("#YouTubeTrailersConfigPage");
+                Dashboard.showLoadingMsg();
+                ApiClient.ajax({ type: "POST", url: ApiClient.getUrl("Trailers/admin/ytdlp/update"), dataType: "json" })
+                    .then(function (r) {
+                        Dashboard.hideLoadingMsg();
+                        Dashboard.alert(r.ok ? ("yt-dlp updated — version " + r.version) : ("yt-dlp update failed: " + r.message));
+                        loadVersion(page);
+                    })
+                    .catch(function () {
+                        Dashboard.hideLoadingMsg();
+                        Dashboard.alert("yt-dlp update failed.");
+                    });
             });
 
             document.querySelector("#ClearCache").addEventListener("click", function () {
@@ -146,6 +174,7 @@
                 Dashboard.showLoadingMsg();
                 ApiClient.getPluginConfiguration(pluginId).then(function (config) {
                     config.Enabled = page.querySelector("#Enabled").checked;
+                    config.ManageYtDlp = page.querySelector("#ManageYtDlp").checked;
                     config.YtDlpPath = page.querySelector("#YtDlpPath").value;
                     config.FfmpegPath = page.querySelector("#FfmpegPath").value;
                     config.CacheDirectory = page.querySelector("#CacheDirectory").value;

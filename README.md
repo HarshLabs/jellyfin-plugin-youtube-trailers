@@ -36,15 +36,33 @@ rebuilt on the next request.
 ## Requirements
 
 - Jellyfin 10.11+ (server, `net9.0`).
-- **`yt-dlp`** installed on the server host (keep it updated — YouTube changes
-  periodically break extraction; the config page shows the detected version).
+- **`yt-dlp`** — **no manual install needed.** The plugin downloads and
+  maintains its own official yt-dlp standalone binary for your server's OS/arch
+  (Linux x64/arm64/armv7, macOS, Windows) on first start — no Python required.
+  You can also pin a system yt-dlp by setting its path in the config.
 - **`ffmpeg`** — the server's bundled ffmpeg is used by default.
+
+### yt-dlp management
+
+On a fresh install the plugin fetches the correct yt-dlp build from the
+[official yt-dlp releases](https://github.com/yt-dlp/yt-dlp/releases) into its
+data folder and uses it automatically. The config page shows the detected
+version and has a **Download / update yt-dlp now** button — handy because
+YouTube changes periodically break older yt-dlp builds. To use a system-managed
+yt-dlp instead (e.g. installed via your package manager), set its absolute path
+in **yt-dlp path** and it takes precedence over the managed copy. Auto-management
+can be turned off with the **Manage yt-dlp automatically** toggle.
+
+> Note: the managed Linux binary targets glibc (works on the common
+> Debian/Ubuntu-based Jellyfin Docker images). On musl systems (Alpine), install
+> yt-dlp via the package manager and set the path instead.
 
 ## Configuration
 
 Dashboard → Plugins → **YouTube Trailers**:
 
-- Enable toggle, **yt-dlp / ffmpeg paths**, **cache directory**.
+- Enable toggle, **Manage yt-dlp automatically** + **Download / update yt-dlp**
+  button, optional **yt-dlp / ffmpeg paths**, **cache directory**.
 - **Format selector** (quality/codec) and **extra yt-dlp arguments**
   (`--proxy` for geo-blocked trailers, `--cookies` for age-restricted,
   `--extractor-args` for PO tokens, `--limit-rate`, …).
