@@ -1,12 +1,21 @@
 [
-  {
-    "guid": "00e99003-cf35-4a65-bf44-35104dfeb76a",
-    "name": "YouTube Trailers",
-    "description": "Resolves YouTube trailers server-side with yt-dlp and stream-copy remuxes them to AVPlayer-native fMP4 HLS, so tvOS / AVKit clients (Apple TV) play one clean URL with zero on-device extraction — for both in-app trailers and the Top Shelf. Includes a dashboard config page and a daily prune task that bounds the cache by age and LRU size.",
-    "overview": "Server-side YouTube trailers as AVPlayer-native HLS for tvOS clients.",
-    "owner": "harshlabsllc",
-    "category": "General",
-    "imageUrl": "https://raw.githubusercontent.com/HarshLabs/jellyfin-plugin-youtube-trailers/main/assets/icon.png",
-    "versions": []
-  }
+    {
+        "guid": "00e99003-cf35-4a65-bf44-35104dfeb76a",
+        "name": "YouTube Trailers",
+        "description": "Resolves YouTube trailers server-side with yt-dlp and stream-copy remuxes\nthem to AVPlayer-native fMP4 HLS, so tvOS / AVKit clients (Apple TV) play one\nclean URL with zero on-device extraction \u2014 for both in-app trailers and the\nTop Shelf. No re-encoding; resolution is cached and served as a live HLS\nbundle. Includes a dashboard config page (tool paths, format selector, extra\nyt-dlp arguments, cache location, yt-dlp version) and a daily prune scheduled\ntask that bounds the cache by age and LRU size cap so it never grows unbounded.\n",
+        "overview": "Server-side YouTube trailers as AVPlayer-native HLS for tvOS clients.",
+        "owner": "harshlabsllc",
+        "category": "General",
+        "imageUrl": "https://raw.githubusercontent.com/HarshLabs/jellyfin-plugin-youtube-trailers/main/assets/icon.png",
+        "versions": [
+            {
+                "version": "1.0.0.0",
+                "changelog": "Server-side YouTube trailer resolution (yt-dlp) stream-copy remuxed to AVPlayer-native fMP4 HLS, for in-app trailers and the Top Shelf \u2014 zero on-device extraction. Dashboard config page (tool paths, format selector, extra yt-dlp arguments, cache directory, yt-dlp version) and a daily prune task that bounds the cache by age and LRU size.\n",
+                "targetAbi": "10.11.0.0",
+                "sourceUrl": "https://github.com/HarshLabs/jellyfin-plugin-youtube-trailers/releases/download/v1.0.0.0/youtube-trailers_1.0.0.0.zip",
+                "checksum": "9956b79d7e2d76432929c27bdb43ee04",
+                "timestamp": "2026-06-18T17:30:32Z"
+            }
+        ]
+    }
 ]
