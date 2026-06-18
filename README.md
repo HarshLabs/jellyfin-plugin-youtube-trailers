@@ -1,0 +1,68 @@
+# YouTube Trailers for Jellyfin
+
+Resolves YouTube trailers **server-side** and serves them as AVPlayer-native
+fMP4 HLS, so tvOS / AVKit clients (Apple TV) play one clean URL with **zero
+on-device extraction** — for both in-app trailers and the Top Shelf.
+
+## Why
+
+Client-side YouTube extraction (descrambling the player JS on the device) is
+slow, CPU-heavy, uncancellable, and breaks whenever YouTube changes. It also
+hits googlevideo's IP-binding and ~6-hour URL expiry. Moving resolution to the
+server fixes all of that:
+
+- **`yt-dlp`** resolves the best adaptive streams (far more robust than any
+  on-device extractor, updated within hours of YouTube changes).
+- **`ffmpeg`** stream-copies them into an AVPlayer-native fMP4 **HLS** bundle
+  (no re-encode). A live event playlist means fast time-to-first-frame.
+- The client only ever talks to your Jellyfin server, so there's no
+  IP-binding / expiry — and the Apple TV pays no extraction CPU.
+
+## How it works
+
+The plugin exposes a small set of endpoints under `/Trailers/`:
+
+- `GET /Trailers/{videoId}/main.m3u8` — resolves + remuxes on a cache miss and
+  serves the HLS playlist (built incrementally; first segment is ready in a few
+  seconds).
+- `GET /Trailers/{videoId}/{init.mp4|segN.m4s}` — fMP4 init/media segments
+  (HTTP range supported).
+- `POST /Trailers/{videoId}/prewarm` — fire-and-forget warm-up.
+- `GET /Trailers/health` — capability probe for clients.
+
+Bundles are cached on disk and self-heal: a pruned/cleared bundle is simply
+rebuilt on the next request.
+
+## Requirements
+
+- Jellyfin 10.11+ (server, `net9.0`).
+- **`yt-dlp`** installed on the server host (keep it updated — YouTube changes
+  periodically break extraction; the config page shows the detected version).
+- **`ffmpeg`** — the server's bundled ffmpeg is used by default.
+
+## Configuration
+
+Dashboard → Plugins → **YouTube Trailers**:
+
+- Enable toggle, **yt-dlp / ffmpeg paths**, **cache directory**.
+- **Format selector** (quality/codec) and **extra yt-dlp arguments**
+  (`--proxy` for geo-blocked trailers, `--cookies` for age-restricted,
+  `--extractor-args` for PO tokens, `--limit-rate`, …).
+- **Resolve timeout** and **max concurrent builds**.
+- **Cache management** — live size/count, a *Clear cache* button, and a daily
+  prune task bounded by **max age (days)** and **max size (GB)**.
+- Detected **yt-dlp version** display.
+
+## Install
+
+Add the plugin repository to Jellyfin (Dashboard → Plugins → Repositories):
+
+```
+https://raw.githubusercontent.com/HarshLabs/jellyfin-plugin-youtube-trailers/main/manifest.json
+```
+
+Then install **YouTube Trailers** from the catalog and restart Jellyfin.
+
+## License
+
+MIT — see [LICENSE](LICENSE).

@@ -1,0 +1,12 @@
+[
+  {
+    "guid": "00e99003-cf35-4a65-bf44-35104dfeb76a",
+    "name": "YouTube Trailers",
+    "description": "Resolves YouTube trailers server-side with yt-dlp and stream-copy remuxes them to AVPlayer-native fMP4 HLS, so tvOS / AVKit clients (Apple TV) play one clean URL with zero on-device extraction — for both in-app trailers and the Top Shelf. Includes a dashboard config page and a daily prune task that bounds the cache by age and LRU size.",
+    "overview": "Server-side YouTube trailers as AVPlayer-native HLS for tvOS clients.",
+    "owner": "harshlabsllc",
+    "category": "General",
+    "imageUrl": "https://raw.githubusercontent.com/HarshLabs/jellyfin-plugin-youtube-trailers/main/assets/icon.png",
+    "versions": []
+  }
+]

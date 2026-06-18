@@ -1,0 +1,20 @@
+name: YouTube Trailers
+guid: 00e99003-cf35-4a65-bf44-35104dfeb76a
+version: 1.0.0.0
+targetAbi: 10.11.0.0
+framework: net9.0
+overview: Server-side YouTube trailers as AVPlayer-native HLS for tvOS clients.
+description: |
+  Resolves YouTube trailers server-side with yt-dlp and stream-copy remuxes
+  them to AVPlayer-native fMP4 HLS, so tvOS / AVKit clients (Apple TV) play one
+  clean URL with zero on-device extraction — for both in-app trailers and the
+  Top Shelf. No re-encoding; resolution is cached and served as a live HLS
+  bundle. Includes a dashboard config page (tool paths, format selector, extra
+  yt-dlp arguments, cache location, yt-dlp version) and a daily prune scheduled
+  task that bounds the cache by age and LRU size cap so it never grows unbounded.
+category: General
+owner: harshlabsllc
+artifacts:
+  - Jellyfin.Plugin.YouTubeTrailers.dll
+changelog: |
+  Initial release.

@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>YouTube Trailers</title>
+</head>
+<body>
+<div id="YouTubeTrailersConfigPage" data-role="page" class="page type-interior pluginConfigurationPage">
+    <div data-role="content">
+        <div class="content-primary">
+            <form id="YouTubeTrailersConfigForm">
+                <div class="checkboxContainer checkboxContainer-withDescription">
+                    <label>
+                        <input is="emby-checkbox" type="checkbox" id="Enabled" />
+                        <span>Enable YouTube trailers</span>
+                    </label>
+                    <div class="fieldDescription">Resolve YouTube trailers server-side and serve them as AVPlayer-native HLS.</div>
+                </div>
+
+                <div class="inputContainer">
+                    <input is="emby-input" type="text" id="YtDlpPath" label="yt-dlp path" />
+                    <div class="fieldDescription">Absolute path to the yt-dlp binary on this server. <strong id="YtDlpVersion">Detected version: …</strong> — keep yt-dlp updated; YouTube changes periodically break extraction.</div>
+                </div>
+
+                <div class="inputContainer">
+                    <input is="emby-input" type="text" id="FfmpegPath" label="ffmpeg path (optional)" />
+                    <div class="fieldDescription">Leave blank to use the server's bundled ffmpeg.</div>
+                </div>
+
+                <div class="inputContainer">
+                    <input is="emby-input" type="text" id="CacheDirectory" label="Cache directory (optional)" />
+                    <div class="fieldDescription">Leave blank to use a "youtube-trailers" folder under Jellyfin's cache path. Changing this does not migrate existing bundles — old ones remain at the previous path (clear them there manually).</div>
+                </div>
+
+                <h3 style="margin-top:2em;">Advanced</h3>
+
+                <div class="inputContainer">
+                    <input is="emby-input" type="text" id="FormatSelector" label="yt-dlp format selector" />
+                    <div class="fieldDescription">Default prefers 1080p AVC1 + AAC. Lower to e.g. <code>height&lt;=720</code> for less bandwidth/CPU.</div>
+                </div>
+
+                <div class="inputContainer">
+                    <input is="emby-input" type="text" id="YtDlpArguments" label="Extra yt-dlp arguments" />
+                    <div class="fieldDescription">Space-separated. Use for <code>--proxy URL</code> (geo-blocked trailers), <code>--cookies FILE</code> / <code>--cookies-from-browser B</code> (age-restricted or bot-checked), <code>--extractor-args</code> (PO tokens), <code>--limit-rate</code>. Wrap values with spaces in double quotes.</div>
+                </div>
+
+                <div class="inputContainer">
+                    <input is="emby-input" type="number" id="ResolveTimeoutSeconds" label="Resolve timeout (seconds)" min="10" max="300" />
+                </div>
+
+                <div class="inputContainer">
+                    <input is="emby-input" type="number" id="MaxConcurrentBuilds" label="Max concurrent builds" min="1" max="16" />
+                    <div class="fieldDescription">Server-side trailer builds running at once. Raise on a powerful server, lower on a weak one. Requires a server restart to take effect.</div>
+                </div>
+
+                <h3 style="margin-top:2em;">Cache</h3>
+
+                <div class="inputContainer">
+                    <input is="emby-input" type="number" id="MaxAgeDays" label="Max bundle age (days, 0 = no limit)" min="0" />
+                    <div class="fieldDescription">The daily prune task evicts bundles not used within this many days.</div>
+                </div>
+
+                <div class="inputContainer">
+                    <input is="emby-input" type="number" id="MaxCacheGigabytes" label="Max cache size (GB, 0 = no limit)" min="0" />
+                    <div class="fieldDescription">The daily prune task trims least-recently-used bundles until under this size.</div>
+                </div>
+
+                <div class="fieldDescription" id="CacheStats" style="margin:1em 0;">Cache: …</div>
+
+                <div style="display:flex; gap:1em; margin-bottom:2em;">
+                    <button is="emby-button" type="button" id="RefreshStats" class="raised button-cancel"><span>Refresh stats</span></button>
+                    <button is="emby-button" type="button" id="ClearCache" class="raised button-cancel"><span>Clear cache now</span></button>
+                </div>
+
+                <button is="emby-button" type="submit" class="raised button-submit block"><span>Save</span></button>
+            </form>
+        </div>
+    </div>
+
+    <script type="text/javascript">
+        (function () {
+            var pluginId = "00e99003-cf35-4a65-bf44-35104dfeb76a";
+
+            function loadStats(page) {
+                ApiClient.ajax({ type: "GET", url: ApiClient.getUrl("Trailers/admin/stats"), dataType: "json" })
+                    .then(function (s) {
+                        page.querySelector("#CacheStats").textContent =
+                            "Cache: " + s.count + " trailer(s), " + s.megabytes + " MB on disk.";
+                    })
+                    .catch(function () {
+                        page.querySelector("#CacheStats").textContent = "Cache: unavailable.";
+                    });
+            }
+
+            function loadVersion(page) {
+                ApiClient.ajax({ type: "GET", url: ApiClient.getUrl("Trailers/admin/version"), dataType: "json" })
+                    .then(function (v) {
+                        page.querySelector("#YtDlpVersion").textContent = "Detected version: " + v.ytDlp;
+                    })
+                    .catch(function () {
+                        page.querySelector("#YtDlpVersion").textContent = "Detected version: unavailable";
+                    });
+            }
+
+            document.querySelector("#YouTubeTrailersConfigPage").addEventListener("pageshow", function () {
+                var page = this;
+                Dashboard.showLoadingMsg();
+                ApiClient.getPluginConfiguration(pluginId).then(function (config) {
+                    page.querySelector("#Enabled").checked = config.Enabled;
+                    page.querySelector("#YtDlpPath").value = config.YtDlpPath || "";
+                    page.querySelector("#FfmpegPath").value = config.FfmpegPath || "";
+                    page.querySelector("#CacheDirectory").value = config.CacheDirectory || "";
+                    page.querySelector("#FormatSelector").value = config.FormatSelector || "";
+                    page.querySelector("#YtDlpArguments").value = config.YtDlpArguments || "";
+                    page.querySelector("#ResolveTimeoutSeconds").value = config.ResolveTimeoutSeconds;
+                    page.querySelector("#MaxConcurrentBuilds").value = config.MaxConcurrentBuilds;
+                    page.querySelector("#MaxAgeDays").value = config.MaxAgeDays;
+                    page.querySelector("#MaxCacheGigabytes").value = config.MaxCacheGigabytes;
+                    Dashboard.hideLoadingMsg();
+                });
+                loadStats(page);
+                loadVersion(page);
+            });
+
+            document.querySelector("#RefreshStats").addEventListener("click", function () {
+                loadStats(document.querySelector("#YouTubeTrailersConfigPage"));
+            });
+
+            document.querySelector("#ClearCache").addEventListener("click", function () {
+                var page = document.querySelector("#YouTubeTrailersConfigPage");
+                Dashboard.showLoadingMsg();
+                ApiClient.ajax({ type: "POST", url: ApiClient.getUrl("Trailers/admin/clear"), dataType: "json" })
+                    .then(function (r) {
+                        Dashboard.hideLoadingMsg();
+                        Dashboard.alert("Cleared " + r.removed + " cached trailer bundle(s).");
+                        loadStats(page);
+                    })
+                    .catch(function () {
+                        Dashboard.hideLoadingMsg();
+                        Dashboard.alert("Failed to clear cache.");
+                    });
+            });
+
+            document.querySelector("#YouTubeTrailersConfigForm").addEventListener("submit", function (e) {
+                e.preventDefault();
+                var page = document.querySelector("#YouTubeTrailersConfigPage");
+                Dashboard.showLoadingMsg();
+                ApiClient.getPluginConfiguration(pluginId).then(function (config) {
+                    config.Enabled = page.querySelector("#Enabled").checked;
+                    config.YtDlpPath = page.querySelector("#YtDlpPath").value;
+                    config.FfmpegPath = page.querySelector("#FfmpegPath").value;
+                    config.CacheDirectory = page.querySelector("#CacheDirectory").value;
+                    config.FormatSelector = page.querySelector("#FormatSelector").value;
+                    config.YtDlpArguments = page.querySelector("#YtDlpArguments").value;
+                    config.ResolveTimeoutSeconds = parseInt(page.querySelector("#ResolveTimeoutSeconds").value, 10);
+                    config.MaxConcurrentBuilds = parseInt(page.querySelector("#MaxConcurrentBuilds").value, 10);
+                    config.MaxAgeDays = parseInt(page.querySelector("#MaxAgeDays").value, 10);
+                    config.MaxCacheGigabytes = parseInt(page.querySelector("#MaxCacheGigabytes").value, 10);
+                    ApiClient.updatePluginConfiguration(pluginId, config).then(function (result) {
+                        Dashboard.processPluginConfigurationUpdateResult(result);
+                    });
+                });
+                return false;
+            });
+        })();
+    </script>
+</div>
+</body>
+</html>
