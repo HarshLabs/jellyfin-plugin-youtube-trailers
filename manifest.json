@@ -9,6 +9,14 @@
         "imageUrl": "https://raw.githubusercontent.com/HarshLabs/jellyfin-plugin-youtube-trailers/main/assets/icon.png",
         "versions": [
             {
+                "version": "1.1.2.0",
+                "changelog": "Proxy now routes the ffmpeg fetch via environment variables, fixing servers whose ffmpeg ignores the -http_proxy option (e.g. Jellyfin's Windows 7.x build). The proxy bypasses a bad network route to a Google CDN edge end to end.\n",
+                "targetAbi": "10.11.0.0",
+                "sourceUrl": "https://github.com/HarshLabs/jellyfin-plugin-youtube-trailers/releases/download/v1.1.2.0/youtube-trailers_1.1.2.0.zip",
+                "checksum": "3b6047440180b0978e8196930e1f1b3b",
+                "timestamp": "2026-06-19T00:57:28Z"
+            },
+            {
                 "version": "1.1.1.0",
                 "changelog": "ffmpeg now reconnects on transient network errors instead of failing a build when the server's connection to Google's CDN times out. New Proxy setting that applies to both yt-dlp and the actual ffmpeg fetch, so geo-blocked trailers work end to end (a proxy in yt-dlp args alone only covered resolution).\n",
                 "targetAbi": "10.11.0.0",
