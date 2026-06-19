@@ -63,10 +63,15 @@ Dashboard → Plugins → **YouTube Trailers**:
 
 - Enable toggle, **Manage yt-dlp automatically** + **Download / update yt-dlp**
   button, optional **yt-dlp / ffmpeg paths**, **cache directory**.
-- **Format selector** (quality/codec) and **extra yt-dlp arguments**
-  (`--proxy` for geo-blocked trailers, `--cookies` for age-restricted,
-  `--extractor-args` for PO tokens, `--limit-rate`, …).
+- **Format selector** (quality/codec), a **Proxy** setting for geo-blocked
+  trailers (applied to *both* yt-dlp resolution and the ffmpeg fetch), and
+  **extra yt-dlp arguments** (`--cookies` for age-restricted, `--extractor-args`
+  for PO tokens, `--limit-rate`, …).
 - **Resolve timeout** and **max concurrent builds**.
+
+The build also reconnects automatically on transient network errors, so a
+server with an imperfect path to Google's CDN retries rather than failing the
+whole trailer.
 - **Cache management** — live size/count, a *Clear cache* button, and a daily
   prune task bounded by **max age (days)** and **max size (GB)**.
 - Detected **yt-dlp version** display.

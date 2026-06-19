@@ -47,11 +47,20 @@ public class PluginConfiguration : BasePluginConfiguration
         "bestvideo[height<=1080][vcodec^=avc1]+bestaudio[acodec^=mp4a]/best[ext=mp4]/best";
 
     /// <summary>
+    /// HTTP/HTTPS/SOCKS proxy URL (e.g. <c>http://host:port</c> or
+    /// <c>socks5://host:port</c>) applied to BOTH yt-dlp (resolution) AND ffmpeg
+    /// (the actual video fetch). Use this — not a bare <c>--proxy</c> in
+    /// <see cref="YtDlpArguments"/> — for geo-blocked trailers, since the fetch
+    /// must also be proxied. Empty = direct connection.
+    /// </summary>
+    public string Proxy { get; set; } = string.Empty;
+
+    /// <summary>
     /// Extra space-separated arguments passed to every yt-dlp invocation.
-    /// Pro escape hatch for: <c>--proxy URL</c> (geo-blocked trailers),
-    /// <c>--cookies FILE</c> / <c>--cookies-from-browser B</c> (age-restricted or
-    /// bot-checked videos), <c>--extractor-args</c> (PO tokens),
-    /// <c>--limit-rate</c>, etc. Empty by default. Admin-only input.
+    /// Pro escape hatch for: <c>--cookies FILE</c> / <c>--cookies-from-browser B</c>
+    /// (age-restricted or bot-checked videos), <c>--extractor-args</c> (PO
+    /// tokens), <c>--limit-rate</c>, etc. For a proxy use the dedicated Proxy
+    /// setting (it also proxies ffmpeg). Empty by default. Admin-only input.
     /// </summary>
     public string YtDlpArguments { get; set; } = string.Empty;
 

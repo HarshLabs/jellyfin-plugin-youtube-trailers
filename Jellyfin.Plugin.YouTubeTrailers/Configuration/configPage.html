@@ -51,6 +51,11 @@
                 </div>
 
                 <div class="inputContainer">
+                    <input is="emby-input" type="text" id="Proxy" label="Proxy (optional)" />
+                    <div class="fieldDescription">e.g. <code>http://host:port</code> or <code>socks5://host:port</code>. Applied to <strong>both</strong> yt-dlp and the ffmpeg fetch — use this for geo-blocked trailers (the actual download must be proxied too, not just resolution).</div>
+                </div>
+
+                <div class="inputContainer">
                     <input is="emby-input" type="text" id="YtDlpArguments" label="Extra yt-dlp arguments" />
                     <div class="fieldDescription">Space-separated. Use for <code>--proxy URL</code> (geo-blocked trailers), <code>--cookies FILE</code> / <code>--cookies-from-browser B</code> (age-restricted or bot-checked), <code>--extractor-args</code> (PO tokens), <code>--limit-rate</code>. Wrap values with spaces in double quotes.</div>
                 </div>
@@ -123,6 +128,7 @@
                     page.querySelector("#FfmpegPath").value = config.FfmpegPath || "";
                     page.querySelector("#CacheDirectory").value = config.CacheDirectory || "";
                     page.querySelector("#FormatSelector").value = config.FormatSelector || "";
+                    page.querySelector("#Proxy").value = config.Proxy || "";
                     page.querySelector("#YtDlpArguments").value = config.YtDlpArguments || "";
                     page.querySelector("#ResolveTimeoutSeconds").value = config.ResolveTimeoutSeconds;
                     page.querySelector("#MaxConcurrentBuilds").value = config.MaxConcurrentBuilds;
@@ -179,6 +185,7 @@
                     config.FfmpegPath = page.querySelector("#FfmpegPath").value;
                     config.CacheDirectory = page.querySelector("#CacheDirectory").value;
                     config.FormatSelector = page.querySelector("#FormatSelector").value;
+                    config.Proxy = page.querySelector("#Proxy").value;
                     config.YtDlpArguments = page.querySelector("#YtDlpArguments").value;
                     config.ResolveTimeoutSeconds = parseInt(page.querySelector("#ResolveTimeoutSeconds").value, 10);
                     config.MaxConcurrentBuilds = parseInt(page.querySelector("#MaxConcurrentBuilds").value, 10);

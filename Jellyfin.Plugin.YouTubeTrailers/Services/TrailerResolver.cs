@@ -422,7 +422,12 @@ public sealed class TrailerResolver
         psi.ArgumentList.Add("--get-url");
         psi.ArgumentList.Add("--no-warnings");
         psi.ArgumentList.Add("--no-playlist");
-        // Admin-configured extra args (proxy, cookies, extractor-args, rate limit…).
+        if (!string.IsNullOrWhiteSpace(cfg.Proxy))
+        {
+            psi.ArgumentList.Add("--proxy");
+            psi.ArgumentList.Add(cfg.Proxy);
+        }
+        // Admin-configured extra args (cookies, extractor-args, rate limit…).
         foreach (var arg in SplitArgs(cfg.YtDlpArguments))
         {
             psi.ArgumentList.Add(arg);
@@ -476,6 +481,27 @@ public sealed class TrailerResolver
         psi.ArgumentList.Add("-y");
         foreach (var url in urls)
         {
+            // Resilience for servers with a flaky/slow path to googlevideo
+            // (connection timeouts surface as ffmpeg ETIMEDOUT, e.g. -138 on
+            // Windows): reconnect on network errors and mid-stream drops instead
+            // of failing the whole build. These are input options — must precede
+            // the matching -i. Harmless on a healthy network (no reconnects fire).
+            psi.ArgumentList.Add("-reconnect");
+            psi.ArgumentList.Add("1");
+            psi.ArgumentList.Add("-reconnect_on_network_error");
+            psi.ArgumentList.Add("1");
+            psi.ArgumentList.Add("-reconnect_streamed");
+            psi.ArgumentList.Add("1");
+            psi.ArgumentList.Add("-reconnect_delay_max");
+            psi.ArgumentList.Add("5");
+            // Proxy the ACTUAL fetch too (not just yt-dlp's resolution) — without
+            // this, geo-blocked content resolves through the proxy but ffmpeg
+            // still fetches direct and gets blocked.
+            if (!string.IsNullOrWhiteSpace(cfg.Proxy))
+            {
+                psi.ArgumentList.Add("-http_proxy");
+                psi.ArgumentList.Add(cfg.Proxy);
+            }
             psi.ArgumentList.Add("-i");
             psi.ArgumentList.Add(url);
         }
