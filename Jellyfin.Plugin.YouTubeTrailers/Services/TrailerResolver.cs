@@ -537,6 +537,18 @@ public sealed class TrailerResolver
         psi.ArgumentList.Add("independent_segments+temp_file");
         psi.ArgumentList.Add(PlaylistName);
 
+        // Belt-and-suspenders proxy: some ffmpeg builds (notably Jellyfin's
+        // Windows 7.x with schannel) ignore the -http_proxy *option* for HTTPS
+        // but DO honor the proxy environment variables — set both casings so the
+        // fetch is reliably routed regardless of build.
+        if (!string.IsNullOrWhiteSpace(cfg.Proxy))
+        {
+            psi.Environment["http_proxy"] = cfg.Proxy;
+            psi.Environment["https_proxy"] = cfg.Proxy;
+            psi.Environment["HTTP_PROXY"] = cfg.Proxy;
+            psi.Environment["HTTPS_PROXY"] = cfg.Proxy;
+        }
+
         // Bound concurrent ffmpeg jobs. Acquired here, released when ffmpeg exits.
         // Cancellable so a request abandoned while queued for a slot (and holding
         // the per-video gate) doesn't pin it for the slot-holder's full build.

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 PROJECT="Jellyfin.Plugin.YouTubeTrailers"
-VERSION="1.1.1.0"
+VERSION="1.1.2.0"
 PLUGIN_GUID="00e99003-cf35-4a65-bf44-35104dfeb76a"
 
 REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
