@@ -9,6 +9,14 @@
         "imageUrl": "https://raw.githubusercontent.com/HarshLabs/jellyfin-plugin-youtube-trailers/main/assets/icon.png",
         "versions": [
             {
+                "version": "1.1.1.0",
+                "changelog": "ffmpeg now reconnects on transient network errors instead of failing a build when the server's connection to Google's CDN times out. New Proxy setting that applies to both yt-dlp and the actual ffmpeg fetch, so geo-blocked trailers work end to end (a proxy in yt-dlp args alone only covered resolution).\n",
+                "targetAbi": "10.11.0.0",
+                "sourceUrl": "https://github.com/HarshLabs/jellyfin-plugin-youtube-trailers/releases/download/v1.1.1.0/youtube-trailers_1.1.1.0.zip",
+                "checksum": "a2eddb3e410d446c8446987f989ef1d8",
+                "timestamp": "2026-06-19T00:22:43Z"
+            },
+            {
                 "version": "1.1.0.0",
                 "changelog": "The plugin now downloads and maintains its own official yt-dlp standalone binary for your server's OS/architecture (Linux x64/arm64/armv7, macOS, Windows) \u2014 no manual install and no Python required, so it works out of the box. Set a yt-dlp path only to pin a system copy. Config page adds a \"Download / update yt-dlp\" button and shows the detected version.\n",
                 "targetAbi": "10.11.0.0",
