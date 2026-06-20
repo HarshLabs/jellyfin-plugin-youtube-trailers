@@ -364,12 +364,12 @@ public sealed class TrailerResolver
         return IsPlayable(videoId);
     }
 
-    // Max time the full-screen (?complete=1) path blocks waiting for the remux to
-    // finish before falling back to serving the still-live playlist. Bounds the
-    // worst-case startup delay for a slow/throttled trailer — kept short so a
-    // server that can't finish quickly falls back to live promptly instead of
-    // stalling playback. Warm/fast trailers complete well inside this.
-    private const int CompleteWaitCapMs = 10_000;
+    // Full-screen (?complete=1) grace: serve the finite VOD playlist if the remux
+    // is already done (warm/prewarmed → real scrubber, zero wait), otherwise start
+    // live almost immediately. Kept tiny so it never adds meaningful startup
+    // latency — a cold/throttled trailer just plays live now and shows the scrubber
+    // on replay once warm, instead of stalling here.
+    private const int CompleteWaitCapMs = 3_000;
 
     // If no first segment appears within this window, the build is killed and
     // negative-cached. A dead CDN edge makes ffmpeg's -reconnect retry forever,

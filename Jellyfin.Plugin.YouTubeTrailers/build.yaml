@@ -1,6 +1,6 @@
 name: YouTube Trailers
 guid: 00e99003-cf35-4a65-bf44-35104dfeb76a
-version: 1.1.5.0
+version: 1.1.6.0
 targetAbi: 10.11.0.0
 framework: net9.0
 overview: Server-side YouTube trailers as AVPlayer-native HLS for tvOS clients.
