@@ -364,6 +364,51 @@ public sealed class TrailerResolver
         return IsPlayable(videoId);
     }
 
+    // Max time the full-screen (?complete=1) path blocks waiting for the remux to
+    // finish before falling back to serving the still-live playlist. Bounds the
+    // worst-case startup delay for a slow/throttled trailer.
+    private const int CompleteWaitCapMs = 20_000;
+
+    /// <summary>
+    /// Waits (bounded) until the bundle is fully remuxed (ENDLIST) or the job
+    /// dies. Used by the full-screen client path so AVKit loads a finite VOD
+    /// playlist (a real scrubber) instead of the live-stream UI. On timeout the
+    /// caller falls back to the still-live playlist, so a slow remux never blocks
+    /// playback for long.
+    /// </summary>
+    public async Task<bool> WaitForCompleteAsync(string videoId, CancellationToken cancellationToken)
+    {
+        var sw = Stopwatch.StartNew();
+        while (sw.ElapsedMilliseconds < CompleteWaitCapMs)
+        {
+            if (IsComplete(videoId))
+            {
+                return true;
+            }
+            if (_jobs.TryGetValue(videoId, out var job) && job.Failed)
+            {
+                return false;
+            }
+            await Task.Delay(150, cancellationToken).ConfigureAwait(false);
+        }
+        return IsComplete(videoId);
+    }
+
+    /// <summary>
+    /// Once the bundle is finished (ENDLIST present), marks the playlist VOD
+    /// instead of EVENT so AVKit renders a normal seek bar rather than the
+    /// live-stream UI (red "LIVE" badge + wall-clock). No-op while still live.
+    /// </summary>
+    public static string FinalizePlaylistType(string playlist)
+    {
+        if (!playlist.Contains("#EXT-X-ENDLIST", StringComparison.Ordinal))
+        {
+            return playlist;
+        }
+        return playlist.Replace(
+            "#EXT-X-PLAYLIST-TYPE:EVENT", "#EXT-X-PLAYLIST-TYPE:VOD", StringComparison.Ordinal);
+    }
+
     /// <summary>
     /// Waits for a specific segment/init file to appear while its job is still
     /// producing output — covers AVPlayer requesting segN before ffmpeg has
