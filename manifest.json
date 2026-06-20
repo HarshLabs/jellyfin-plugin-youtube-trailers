@@ -9,6 +9,14 @@
         "imageUrl": "https://raw.githubusercontent.com/HarshLabs/jellyfin-plugin-youtube-trailers/main/assets/icon.png",
         "versions": [
             {
+                "version": "1.1.6.0",
+                "changelog": "VOD complete-wait becomes a 3s grace (use-if-ready) instead of a 10s block \u2014 no startup penalty on cold/throttled trailers.\n",
+                "targetAbi": "10.11.0.0",
+                "sourceUrl": "https://github.com/HarshLabs/jellyfin-plugin-youtube-trailers/releases/download/v1.1.6.0/youtube-trailers_1.1.6.0.zip",
+                "checksum": "333cbe1703660790069db6991067ab6b",
+                "timestamp": "2026-06-20T20:36:05Z"
+            },
+            {
                 "version": "1.1.5.0",
                 "changelog": "No-segment watchdog kills dead-edge builds in ~20s (was ~60s); shorter VOD complete-wait cap (10s).\n",
                 "targetAbi": "10.11.0.0",
