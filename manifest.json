@@ -9,6 +9,14 @@
         "imageUrl": "https://raw.githubusercontent.com/HarshLabs/jellyfin-plugin-youtube-trailers/main/assets/icon.png",
         "versions": [
             {
+                "version": "1.1.7.0",
+                "changelog": "Failed/killed builds return to the client in ~20s instead of the full ~60s timeout (WaitForPlayable reads the negative-cache failure signal).\n",
+                "targetAbi": "10.11.0.0",
+                "sourceUrl": "https://github.com/HarshLabs/jellyfin-plugin-youtube-trailers/releases/download/v1.1.7.0/youtube-trailers_1.1.7.0.zip",
+                "checksum": "a155b0c8227189dae0b35bbd861d30d9",
+                "timestamp": "2026-06-20T20:46:26Z"
+            },
+            {
                 "version": "1.1.6.0",
                 "changelog": "VOD complete-wait becomes a 3s grace (use-if-ready) instead of a 10s block \u2014 no startup penalty on cold/throttled trailers.\n",
                 "targetAbi": "10.11.0.0",
