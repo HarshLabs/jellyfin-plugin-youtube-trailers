@@ -366,8 +366,17 @@ public sealed class TrailerResolver
 
     // Max time the full-screen (?complete=1) path blocks waiting for the remux to
     // finish before falling back to serving the still-live playlist. Bounds the
-    // worst-case startup delay for a slow/throttled trailer.
-    private const int CompleteWaitCapMs = 20_000;
+    // worst-case startup delay for a slow/throttled trailer — kept short so a
+    // server that can't finish quickly falls back to live promptly instead of
+    // stalling playback. Warm/fast trailers complete well inside this.
+    private const int CompleteWaitCapMs = 10_000;
+
+    // If no first segment appears within this window, the build is killed and
+    // negative-cached. A dead CDN edge makes ffmpeg's -reconnect retry forever,
+    // producing no segment and never exiting on its own — so the playable-wait
+    // would otherwise burn the full ResolveTimeoutSeconds (~60s). Killing early
+    // lets the client's fallback chain reach the next trailer fast.
+    private const int NoProgressKillMs = 20_000;
 
     /// <summary>
     /// Waits (bounded) until the bundle is fully remuxed (ENDLIST) or the job
@@ -636,6 +645,27 @@ public sealed class TrailerResolver
             _logger.LogError(ex, "[YouTubeTrailers] failed to start ffmpeg for {VideoId}", videoId);
             return null;
         }
+
+        // No-progress watchdog: if seg0 hasn't appeared within NoProgressKillMs,
+        // kill the stalled build (a dead CDN edge that ffmpeg keeps reconnecting
+        // to). Killing makes the process exit → the monitor below marks it Failed
+        // and negative-caches it, so the client moves to the next trailer fast
+        // instead of waiting out the full playable timeout. No-op once seg0 lands.
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(NoProgressKillMs).ConfigureAwait(false);
+                if (!IsPlayable(videoId) && !process.HasExited)
+                {
+                    _logger.LogWarning(
+                        "[YouTubeTrailers] No segment within {Ms}ms for {VideoId} — killing stalled build",
+                        NoProgressKillMs, videoId);
+                    try { process.Kill(entireProcessTree: true); } catch { /* already gone */ }
+                }
+            }
+            catch { /* ignore */ }
+        });
 
         // Monitor exit asynchronously — sets Failed and releases the slot.
         job.RunTask = Task.Run(async () =>

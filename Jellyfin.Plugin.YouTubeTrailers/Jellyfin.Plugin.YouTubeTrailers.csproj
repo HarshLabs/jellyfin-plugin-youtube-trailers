@@ -5,9 +5,9 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>Jellyfin.Plugin.YouTubeTrailers</RootNamespace>
     <AssemblyName>Jellyfin.Plugin.YouTubeTrailers</AssemblyName>
-    <AssemblyVersion>1.1.4.0</AssemblyVersion>
-    <FileVersion>1.1.4.0</FileVersion>
-    <Version>1.1.4.0</Version>
+    <AssemblyVersion>1.1.5.0</AssemblyVersion>
+    <FileVersion>1.1.5.0</FileVersion>
+    <Version>1.1.5.0</Version>
     <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
     <Deterministic>true</Deterministic>
     <DebugType>embedded</DebugType>
