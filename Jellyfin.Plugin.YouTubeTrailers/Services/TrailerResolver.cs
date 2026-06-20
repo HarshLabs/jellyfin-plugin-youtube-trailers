@@ -37,6 +37,12 @@ public sealed class TrailerResolver
 
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _gates = new();
     private readonly ConcurrentDictionary<string, TrailerJob> _jobs = new();
+    // Negative cache: a video that just failed to build (unavailable, geo-blocked,
+    // or an unreachable CDN edge) fast-fails for a short window instead of
+    // re-running the full ~30s timeout on every request. This is what makes the
+    // client's "try the next trailer" fallback quick on repeat/prewarmed plays.
+    private readonly ConcurrentDictionary<string, DateTime> _recentFailures = new();
+    private static readonly TimeSpan FailureTtl = TimeSpan.FromMinutes(10);
     // Caps concurrent ffmpeg remuxes so prewarming a shelf can't spawn a swarm.
     // Sized from MaxConcurrentBuilds at construction (restart to change).
     private readonly SemaphoreSlim _startSlots;
@@ -280,6 +286,18 @@ public sealed class TrailerResolver
             return false;
         }
 
+        // Negative-cache fast path: if this video failed recently, don't spend
+        // another full timeout — fail immediately so the client moves on to the
+        // next candidate. Stale entries fall through to a fresh attempt.
+        if (_recentFailures.TryGetValue(videoId, out var failedAt))
+        {
+            if (DateTime.UtcNow - failedAt < FailureTtl)
+            {
+                return false;
+            }
+            _recentFailures.TryRemove(videoId, out _);
+        }
+
         var gate = _gates.GetOrAdd(videoId, _ => new SemaphoreSlim(1, 1));
         await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
@@ -297,6 +315,7 @@ public sealed class TrailerResolver
             var urls = await ResolveUrlsAsync(videoId, cfg, cancellationToken).ConfigureAwait(false);
             if (urls is null || urls.Length == 0)
             {
+                _recentFailures[videoId] = DateTime.UtcNow; // unavailable/geo-blocked → fast-fail next time
                 _logger.LogWarning("[YouTubeTrailers] yt-dlp returned no URLs for {VideoId}", videoId);
                 return false;
             }
@@ -582,11 +601,13 @@ public sealed class TrailerResolver
                 if (process.ExitCode != 0 || !IsComplete(videoId))
                 {
                     job.Failed = true;
+                    _recentFailures[videoId] = DateTime.UtcNow; // negative-cache for fast fallback
                     _logger.LogWarning("[YouTubeTrailers] ffmpeg exit {Exit} for {VideoId}: {Err}",
                         process.ExitCode, videoId, stderr.ToString().Trim());
                 }
                 else
                 {
+                    _recentFailures.TryRemove(videoId, out _); // recovered — clear any prior failure
                     _logger.LogInformation(
                         "[YouTubeTrailers] Completed bundle for {VideoId} in {Ms}ms ({Mode})",
                         videoId, (long)(DateTime.UtcNow - startedUtc).TotalMilliseconds,
