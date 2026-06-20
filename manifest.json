@@ -9,6 +9,14 @@
         "imageUrl": "https://raw.githubusercontent.com/HarshLabs/jellyfin-plugin-youtube-trailers/main/assets/icon.png",
         "versions": [
             {
+                "version": "1.1.5.0",
+                "changelog": "No-segment watchdog kills dead-edge builds in ~20s (was ~60s); shorter VOD complete-wait cap (10s).\n",
+                "targetAbi": "10.11.0.0",
+                "sourceUrl": "https://github.com/HarshLabs/jellyfin-plugin-youtube-trailers/releases/download/v1.1.5.0/youtube-trailers_1.1.5.0.zip",
+                "checksum": "63c7e95a1dd91a379220fc844668d2e1",
+                "timestamp": "2026-06-20T20:29:28Z"
+            },
+            {
                 "version": "1.1.4.0",
                 "changelog": "Finite VOD playlist for full-screen clients (?complete=true) so AVKit shows a real scrubber instead of the live UI.\n",
                 "targetAbi": "10.11.0.0",
