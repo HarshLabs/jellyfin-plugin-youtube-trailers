@@ -359,6 +359,17 @@ public sealed class TrailerResolver
             {
                 return false;
             }
+            // The monitor sets job.Failed then immediately EVICTS the job from
+            // _jobs (so a retry starts fresh), so the check above is easily missed
+            // — the client would then wait out the full timeout even though the
+            // build (or the watchdog kill) already failed. The negative-cache
+            // entry is written at the same instant and survives eviction, so treat
+            // it as the authoritative "this build failed" signal. (This is what
+            // makes the watchdog's 20s kill actually reach the client.)
+            if (_recentFailures.ContainsKey(videoId))
+            {
+                return false;
+            }
             await Task.Delay(150, cancellationToken).ConfigureAwait(false);
         }
         return IsPlayable(videoId);
