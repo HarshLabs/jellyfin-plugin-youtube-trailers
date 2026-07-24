@@ -1,4 +1,5 @@
 using System.IO;
+using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.YouTubeTrailers.Services;
@@ -14,14 +15,30 @@ namespace Jellyfin.Plugin.YouTubeTrailers.Api;
 [Route("Trailers")]
 public sealed class TrailerHlsController : ControllerBase
 {
+    private static readonly string PluginVersion =
+        typeof(Plugin).Assembly.GetName().Version?.ToString() ?? "unknown";
+
+    private static readonly string[] Features = ["hls", "prewarm", "complete-vod"];
+
+    /// <summary>
+    /// Capability probe payload returned by <see cref="Health"/>.
+    /// The JSON names are pinned lowercase to match what this endpoint has
+    /// always emitted — Jellyfin serializes .NET property names verbatim, so
+    /// without these attributes moving from an anonymous type to a record would
+    /// silently rename every field and break existing clients.
+    /// </summary>
+    public sealed record HealthResponse(
+        [property: JsonPropertyName("status")] string Status,
+        [property: JsonPropertyName("plugin")] string Plugin,
+        [property: JsonPropertyName("version")] string Version,
+        [property: JsonPropertyName("features")] string[] Features);
+
     private readonly TrailerResolver _resolver;
-    private readonly YtDlpManager _ytDlp;
     private readonly ILogger<TrailerHlsController> _logger;
 
-    public TrailerHlsController(TrailerResolver resolver, YtDlpManager ytDlp, ILogger<TrailerHlsController> logger)
+    public TrailerHlsController(TrailerResolver resolver, ILogger<TrailerHlsController> logger)
     {
         _resolver = resolver;
-        _ytDlp = ytDlp;
         _logger = logger;
     }
 
@@ -39,7 +56,12 @@ public sealed class TrailerHlsController : ControllerBase
         {
             return NotFound();
         }
-        return Ok(new { status = "ready", plugin = "YouTubeTrailers", version = "0.1.0.0" });
+        // Report the real assembly version, not a literal — clients use this for
+        // capability negotiation and a hardcoded string goes stale silently.
+        // `Features` lets a client detect optional behaviour without version
+        // sniffing. Read from our OWN assembly rather than BasePlugin.Version,
+        // whose signature differs across Jellyfin major versions.
+        return Ok(new HealthResponse("ready", "YouTubeTrailers", PluginVersion, Features));
     }
 
     /// <summary>
@@ -82,6 +104,11 @@ public sealed class TrailerHlsController : ControllerBase
         {
             await _resolver.WaitForCompleteAsync(videoId, cancellationToken).ConfigureAwait(false);
         }
+
+        // Serving the playlist is the one unambiguous "this trailer was played"
+        // signal, so it's where usage is recorded for age/LRU eviction. Segment
+        // requests would be dozens of touches for the same play.
+        _resolver.TouchAccess(videoId);
 
         var playlist = await System.IO.File.ReadAllTextAsync(_resolver.PlaylistPath(videoId), cancellationToken)
             .ConfigureAwait(false);
@@ -148,49 +175,8 @@ public sealed class TrailerHlsController : ControllerBase
 
         // Detached from the request lifetime — must not be cancelled when the
         // POST returns. Errors are logged inside the resolver.
-        _ = Task.Run(() => _resolver.StartIfNeededAsync(videoId, CancellationToken.None));
+        _ = Task.Run(() => _resolver.StartIfNeededAsync(videoId, CancellationToken.None, "prewarm"));
         return Accepted();
-    }
-
-    /// <summary>Cache stats for the admin config page (size + bundle count).</summary>
-    [HttpGet("admin/stats")]
-    [Authorize(Policy = "RequiresElevation")]
-    public IActionResult CacheStats()
-    {
-        var (bytes, count) = _resolver.CacheStats();
-        return Ok(new { bytes, megabytes = bytes / (1024 * 1024), count });
-    }
-
-    /// <summary>Clears the trailer cache (admin config page button).</summary>
-    [HttpPost("admin/clear")]
-    [Authorize(Policy = "RequiresElevation")]
-    public IActionResult ClearCache()
-    {
-        var removed = _resolver.ClearCache();
-        _logger.LogInformation("[YouTubeTrailers] Cache cleared via admin: {Removed} bundle(s) removed", removed);
-        return Ok(new { removed });
-    }
-
-    /// <summary>Installed yt-dlp version (admin config page diagnostic).</summary>
-    [HttpGet("admin/version")]
-    [Authorize(Policy = "RequiresElevation")]
-    public async Task<IActionResult> ToolVersion(CancellationToken cancellationToken)
-    {
-        var version = await _resolver.YtDlpVersionAsync(cancellationToken).ConfigureAwait(false);
-        return Ok(new { ytDlp = version, managed = !_ytDlp.UsingConfigured });
-    }
-
-    /// <summary>
-    /// Downloads / updates the plugin-managed yt-dlp binary (admin config page
-    /// button). Returns the new version on success.
-    /// </summary>
-    [HttpPost("admin/ytdlp/update")]
-    [Authorize(Policy = "RequiresElevation")]
-    public async Task<IActionResult> UpdateYtDlp(CancellationToken cancellationToken)
-    {
-        var (ok, message) = await _ytDlp.DownloadAsync(cancellationToken).ConfigureAwait(false);
-        var version = ok ? await _resolver.YtDlpVersionAsync(cancellationToken).ConfigureAwait(false) : "error";
-        return Ok(new { ok, message, version });
     }
 
     private static string ExtractToken(HttpRequest request)

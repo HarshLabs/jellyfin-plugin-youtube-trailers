@@ -93,9 +93,9 @@ jobs:
 
       - name: Patch build.yaml changelog
         # jprm reads build.yaml's `changelog:` field and embeds it into the
-        # zip's meta.json, which `jprm repo add` then mirrors into
-        # manifest.json. Patching the YAML in-place before build is the
+        # zip's meta.json. Patching the YAML in-place before build is the
         # cleanest way to inject per-release notes without touching jprm.
+        # (manifest.json itself is written later by scripts/update-manifest.py.)
         run: |
           python3 <<'PY'
           import os
@@ -126,27 +126,63 @@ jobs:
         env:
           CHANGELOG: ${{ steps.version.outputs.changelog }}
 
-      - name: Build plugin zip
+      - name: Setup .NET 10 (for the Jellyfin 12 build)
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Build plugin zips (one per Jellyfin ABI)
         id: build
         run: |
-          # jprm reads build.yaml from the project subdir (now patched with
-          # the real per-release changelog), runs dotnet publish, writes
-          # <name>_<version>.zip + .md5sum + .meta.json into ./artifacts/.
-          mkdir -p artifacts
-          jprm --verbosity=debug plugin build \
-            --version="${{ steps.version.outputs.version }}" \
-            Jellyfin.Plugin.YouTubeTrailers
-          ZIP=$(ls artifacts/*.zip | head -1)
-          echo "zip=$ZIP" >> "$GITHUB_OUTPUT"
-          echo "Built: $ZIP"
-          ls -la artifacts/
+          # The plugin supports two Jellyfin majors, which need different
+          # target frameworks and different Jellyfin SDK packages:
+          #   Jellyfin 10.11  -> net9.0,  targetAbi 10.11.0.0
+          #   Jellyfin 12     -> net10.0, targetAbi 12.0.0.0
+          # jprm builds one at a time from build.yaml, so patch the two fields
+          # it reads and run it once per ABI, stashing each zip under a distinct
+          # name (jprm's own filename is <name>_<version>.zip for both).
+          mkdir -p artifacts dist
+          VERSION="${{ steps.version.outputs.version }}"
+
+          build_abi() {
+            local framework="$1" abi="$2" suffix="$3"
+            python3 - "$framework" "$abi" <<'PY'
+          import sys, pathlib
+          framework, abi = sys.argv[1], sys.argv[2]
+          path = pathlib.Path('Jellyfin.Plugin.YouTubeTrailers/build.yaml')
+          out = []
+          for line in path.read_text().splitlines(keepends=True):
+              if line.startswith('framework:'):
+                  out.append(f'framework: {framework}\n')
+              elif line.startswith('targetAbi:'):
+                  out.append(f'targetAbi: {abi}\n')
+              else:
+                  out.append(line)
+          path.write_text(''.join(out))
+          print(f'build.yaml -> framework={framework} targetAbi={abi}')
+          PY
+            rm -f artifacts/*.zip
+            jprm --verbosity=debug plugin build --version="$VERSION" Jellyfin.Plugin.YouTubeTrailers
+            local built
+            built=$(ls artifacts/*.zip | head -1)
+            cp "$built" "dist/youtube-trailers_${VERSION}_${suffix}.zip"
+            echo "  $suffix -> dist/youtube-trailers_${VERSION}_${suffix}.zip"
+          }
+
+          build_abi net9.0  10.11.0.0 jf10.11
+          build_abi net10.0 12.0.0.0  jf12
+
+          {
+            echo "zip_jf1011=dist/youtube-trailers_${VERSION}_jf10.11.zip"
+            echo "zip_jf12=dist/youtube-trailers_${VERSION}_jf12.zip"
+          } >> "$GITHUB_OUTPUT"
+          ls -la dist/
 
       - name: Update manifest.json on main
         if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          CHANGELOG: ${{ steps.version.outputs.changelog }}
         run: |
-          ZIP_NAME=$(basename "${{ steps.build.outputs.zip }}")
-          DOWNLOAD_URL="https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/${ZIP_NAME}"
-
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
@@ -155,7 +191,19 @@ jobs:
           git fetch origin main
           git checkout -B main origin/main
 
-          jprm repo add . "${{ steps.build.outputs.zip }}" --plugin-url="$DOWNLOAD_URL"
+          # Deliberately NOT `jprm repo add`: it de-duplicates by version, so a
+          # second artifact for the same version replaces the first. We publish
+          # one build per Jellyfin major under a single version, so jprm would
+          # silently drop one and strand that audience on the previous release.
+          # scripts/update-manifest.py writes both entries in the order that
+          # makes each server resolve to its own build.
+          printf '%s' "$CHANGELOG" > /tmp/changelog.txt
+          BASE="https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}"
+          python3 scripts/update-manifest.py \
+            --version "${{ steps.version.outputs.version }}" \
+            --changelog-file /tmp/changelog.txt \
+            --entry "${{ steps.build.outputs.zip_jf1011 }}=10.11.0.0=$BASE/$(basename '${{ steps.build.outputs.zip_jf1011 }}')" \
+            --entry "${{ steps.build.outputs.zip_jf12 }}=12.0.0.0=$BASE/$(basename '${{ steps.build.outputs.zip_jf12 }}')"
 
           if git diff --quiet manifest.json; then
             echo "manifest.json unchanged"
@@ -169,6 +217,8 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ steps.build.outputs.zip }}
+          files: |
+            ${{ steps.build.outputs.zip_jf1011 }}
+            ${{ steps.build.outputs.zip_jf12 }}
           generate_release_notes: true
           fail_on_unmatched_files: true

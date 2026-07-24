@@ -1,204 +1,2089 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
+    <meta charset="UTF-8">
     <title>YouTube Trailers</title>
 </head>
 <body>
-<div id="YouTubeTrailersConfigPage" data-role="page" class="page type-interior pluginConfigurationPage">
+<div id="YouTubeTrailersConfigPage" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-input,emby-button,emby-checkbox,emby-select">
+<style>
+    /* ── Dashboard layout ───────────────────────────────────────────
+       Lives inside <body> because Jellyfin's plugin config loader only
+       ingests body content; a <style> in <head> is dropped. Every rule
+       is scoped to #YouTubeTrailersConfigPage so nothing leaks into the
+       rest of the dashboard. Spacing follows an 8px grid expressed in
+       em so it scales with Jellyfin's font-size theme. */
+    /* container-type makes every breakpoint below measure THIS column rather
+       than the viewport. Jellyfin's dashboard sidebar is ~290px, so a 935px
+       window leaves only ~650px of content — viewport media queries fire far
+       too late and the layout breaks while the window still looks "wide". */
+    #YouTubeTrailersConfigPage .ytt-wrap {
+        max-width: 1100px; margin: 0 auto; padding: 2em 1em 4em;
+        container-type: inline-size;
+        container-name: ytt;
+    }
+
+    #YouTubeTrailersConfigPage .ytt-hero {
+        padding: 1em 0 2em;
+        border-bottom: 1px solid rgba(127,127,127,0.18);
+        margin-bottom: 2em;
+    }
+    #YouTubeTrailersConfigPage .ytt-hero-title { margin: 0; font-size: 1.75em; font-weight: 600; letter-spacing: -0.01em; line-height: 1.15; }
+    #YouTubeTrailersConfigPage .ytt-hero-subtitle { margin: 0.5em 0 0; opacity: 0.65; font-size: 0.95em; max-width: 68ch; line-height: 1.5; }
+    #YouTubeTrailersConfigPage .ytt-hero-meta { margin-top: 1em; display: flex; gap: 0.6em; flex-wrap: wrap; align-items: center; }
+
+    #YouTubeTrailersConfigPage .ytt-card {
+        background: rgba(127,127,127,0.06);
+        border: 1px solid rgba(127,127,127,0.18);
+        border-radius: 12px;
+        padding: 1.75em;
+        margin-bottom: 1.25em;
+    }
+    #YouTubeTrailersConfigPage .ytt-card-header { margin: 0 0 1.25em; display: flex; align-items: baseline; gap: 0.7em; flex-wrap: wrap; }
+    #YouTubeTrailersConfigPage .ytt-card-title { margin: 0; font-size: 1.15em; font-weight: 600; }
+    #YouTubeTrailersConfigPage .ytt-card-subtitle { margin: 0; opacity: 0.55; font-size: 0.85em; }
+    #YouTubeTrailersConfigPage .ytt-spacer { flex: 1 1 auto; }
+
+    #YouTubeTrailersConfigPage .ytt-stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 1.25em; }
+    #YouTubeTrailersConfigPage .ytt-stat-value { font-size: 1.6em; font-weight: 600; line-height: 1.1; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; }
+    #YouTubeTrailersConfigPage .ytt-stat-label { font-size: 0.78em; opacity: 0.55; margin-top: 0.25em; text-transform: uppercase; letter-spacing: 0.05em; }
+    #YouTubeTrailersConfigPage .ytt-stat-sub { font-size: 0.8em; opacity: 0.5; margin-top: 0.15em; }
+    #YouTubeTrailersConfigPage .ytt-stat-alert .ytt-stat-value { color: rgb(255, 110, 100); }
+
+    #YouTubeTrailersConfigPage .ytt-row { display: flex; gap: 0.75em; align-items: center; flex-wrap: wrap; }
+
+    #YouTubeTrailersConfigPage .ytt-form-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 220px;
+        gap: 1.5em;
+        align-items: center;
+        padding: 1.1em 0;
+        border-bottom: 1px solid rgba(127,127,127,0.12);
+    }
+    #YouTubeTrailersConfigPage .ytt-form-row:last-of-type { border-bottom: none; }
+    #YouTubeTrailersConfigPage .ytt-form-row.toggle { grid-template-columns: minmax(0, 1fr) auto; }
+    #YouTubeTrailersConfigPage .ytt-label { display: flex; flex-direction: column; gap: 0.2em; }
+    #YouTubeTrailersConfigPage .ytt-label-name { font-weight: 500; font-size: 0.95em; }
+    #YouTubeTrailersConfigPage .ytt-label-help { font-size: 0.82em; opacity: 0.55; line-height: 1.45; }
+
+    #YouTubeTrailersConfigPage .ytt-coverage-row {
+        display: grid;
+        grid-template-columns: minmax(120px, 1fr) minmax(80px, 220px) 150px auto;
+        gap: 1em;
+        align-items: center;
+        padding: 0.6em 0;
+    }
+    #YouTubeTrailersConfigPage .ytt-coverage-bar { background: rgba(127,127,127,0.18); height: 6px; border-radius: 3px; overflow: hidden; }
+    #YouTubeTrailersConfigPage .ytt-coverage-bar-fill { height: 100%; background: linear-gradient(90deg, #34c759, #30a3f0); transition: width 0.3s ease; }
+    #YouTubeTrailersConfigPage .ytt-coverage-counts { font-variant-numeric: tabular-nums; opacity: 0.75; font-size: 0.9em; text-align: right; }
+
+    #YouTubeTrailersConfigPage .ytt-table { width: 100%; border-collapse: collapse; }
+    #YouTubeTrailersConfigPage .ytt-table th {
+        text-align: left; padding: 0.8em 0.7em;
+        font-weight: 600; font-size: 0.78em;
+        text-transform: uppercase; letter-spacing: 0.04em;
+        /* Muted via color, NEVER via opacity: opacity composites the whole
+           element including its background, which would make this sticky header
+           translucent and let the rows scrolling underneath show straight
+           through it. First declaration is the fallback for browsers without
+           color-mix. */
+        color: #8a8a8a;
+        color: color-mix(in srgb, currentColor 62%, transparent);
+        border-bottom: 1px solid rgba(127,127,127,0.25);
+        position: sticky; top: 0;
+        /* Jellyfin forces body{background-color:transparent!important} and puts
+           the real page color on <html>, where it differs per theme (#101010
+           dark, #f2f2f2 light, #033361 blueradiance…). There is no theme
+           variable to read, so the opaque backdrop is resolved at runtime into
+           --ytt-sticky-bg; the literal below is only a last resort. */
+        background: var(--ytt-sticky-bg, #101012);
+        z-index: 2;
+    }
+    #YouTubeTrailersConfigPage .ytt-table td { padding: 0.8em 0.7em; border-bottom: 1px solid rgba(127,127,127,0.10); vertical-align: middle; }
+    /* The title column is the one that matters; everything else is shrink-to-fit
+       so two nowrap action buttons can't squeeze the title down to a 4-line
+       wrap (which is exactly what happened at ~650px of content width). */
+    #YouTubeTrailersConfigPage .ytt-table th:not(.ytt-col-main),
+    #YouTubeTrailersConfigPage .ytt-table td:not(.ytt-col-main) { width: 1%; white-space: nowrap; }
+    #YouTubeTrailersConfigPage .ytt-table .ytt-col-main { width: auto; min-width: 12em; }
+    #YouTubeTrailersConfigPage .ytt-table .ytt-col-main .ytt-sub { white-space: normal; }
+    #YouTubeTrailersConfigPage .ytt-table tbody tr:hover { background: rgba(127,127,127,0.06); }
+    #YouTubeTrailersConfigPage .ytt-table tbody tr:last-child td { border-bottom: none; }
+    #YouTubeTrailersConfigPage .ytt-num { font-variant-numeric: tabular-nums; }
+    /* A row whose trailer is already queued or building. Tinted so the disabled
+       Cache button reads as "busy", not "broken". */
+    #YouTubeTrailersConfigPage .ytt-table tr.ytt-row-busy { background: rgba(10, 132, 255, 0.07); }
+    #YouTubeTrailersConfigPage .ytt-table tr.ytt-row-busy .yttRowWarm { opacity: 0.6; }
+    #YouTubeTrailersConfigPage .ytt-sub { opacity: 0.55; font-size: 0.85em; margin-top: 2px; }
+    #YouTubeTrailersConfigPage .ytt-mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.88em; }
+
+    #YouTubeTrailersConfigPage .ytt-badge {
+        display: inline-flex; align-items: center; gap: 0.3em;
+        padding: 0.22em 0.7em; border-radius: 999px;
+        font-size: 0.78em; font-weight: 500;
+        white-space: nowrap;
+    }
+    #YouTubeTrailersConfigPage .ytt-badge-ok       { background: rgba(52, 199, 89, 0.18);  color: rgb(80, 215, 120); }
+    #YouTubeTrailersConfigPage .ytt-badge-muted    { background: rgba(127,127,127,0.15);   color: rgba(160,160,160,0.85); }
+    #YouTubeTrailersConfigPage .ytt-badge-building { background: rgba(10, 132, 255, 0.20); color: rgb(80, 165, 255); animation: yttPulse 1.6s ease-in-out infinite; }
+    #YouTubeTrailersConfigPage .ytt-badge-queued   { background: rgba(255, 159, 10, 0.20); color: rgb(255, 178, 56); }
+    #YouTubeTrailersConfigPage .ytt-badge-warn     { background: rgba(255, 159, 10, 0.20); color: rgb(255, 178, 56); }
+    #YouTubeTrailersConfigPage .ytt-badge-fail     { background: rgba(255, 59, 48, 0.18);  color: rgb(255, 110, 100); }
+    @keyframes yttPulse {
+        0%, 100% { box-shadow: 0 0 0 0 rgba(10, 132, 255, 0.0); }
+        50%      { box-shadow: 0 0 0 4px rgba(10, 132, 255, 0.18); }
+    }
+
+    #YouTubeTrailersConfigPage .ytt-progress-track { background: rgba(127,127,127,0.2); height: 5px; border-radius: 3px; overflow: hidden; min-width: 70px; }
+    #YouTubeTrailersConfigPage .ytt-progress-fill { height: 100%; background: linear-gradient(90deg, #0a84ff, #34c759); transition: width 0.4s ease; }
+    /* Indeterminate variant for a build whose duration YouTube didn't report —
+       still shows motion so the row doesn't read as stalled. */
+    #YouTubeTrailersConfigPage .ytt-progress-track.indeterminate { position: relative; }
+    #YouTubeTrailersConfigPage .ytt-progress-track.indeterminate::after {
+        content: ""; position: absolute; inset: 0;
+        background: linear-gradient(90deg, transparent 0%, rgba(10,132,255,0) 20%, rgba(10,132,255,0.9) 50%, rgba(10,132,255,0) 80%, transparent 100%);
+        animation: yttShimmer 1.6s linear infinite;
+    }
+    @keyframes yttShimmer { 0% { transform: translateX(-100%); } 100% { transform: translateX(100%); } }
+
+    #YouTubeTrailersConfigPage .ytt-scroll { max-height: 460px; overflow: auto; }
+    #YouTubeTrailersConfigPage .ytt-empty { padding: 2em; text-align: center; opacity: 0.55; font-size: 0.95em; }
+
+    #YouTubeTrailersConfigPage .ytt-input,
+    #YouTubeTrailersConfigPage .ytt-select {
+        width: 100%;
+        box-sizing: border-box;
+        background: rgba(127,127,127,0.08);
+        border: 1px solid rgba(127,127,127,0.22);
+        border-radius: 8px;
+        padding: 0.7em 0.9em;
+        color: inherit;
+        font: inherit;
+        font-size: 0.95em;
+        line-height: 1.3;
+        min-height: 44px;
+        transition: border-color 120ms ease, background-color 120ms ease, box-shadow 120ms ease;
+    }
+    #YouTubeTrailersConfigPage .ytt-input:hover:not(:focus),
+    #YouTubeTrailersConfigPage .ytt-select:hover:not(:focus) { border-color: rgba(127,127,127,0.36); }
+    #YouTubeTrailersConfigPage .ytt-input:focus,
+    #YouTubeTrailersConfigPage .ytt-select:focus {
+        outline: none;
+        border-color: rgba(10, 132, 255, 0.55);
+        background: rgba(127,127,127,0.14);
+        box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.18);
+    }
+    #YouTubeTrailersConfigPage .ytt-input::placeholder { opacity: 0.5; }
+    #YouTubeTrailersConfigPage .ytt-select {
+        appearance: none; -webkit-appearance: none; -moz-appearance: none;
+        background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8'><path fill='none' stroke='%23999' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round' d='M1 1.5l5 5 5-5'/></svg>");
+        background-repeat: no-repeat;
+        background-position: right 0.95em center;
+        background-size: 12px 8px;
+        padding-right: 2.6em;
+        cursor: pointer;
+    }
+    #YouTubeTrailersConfigPage .ytt-select option { color: black; }
+    #YouTubeTrailersConfigPage .ytt-input-group { display: flex; flex-direction: column; gap: 0.45em; min-width: 0; }
+    #YouTubeTrailersConfigPage .ytt-input-label { font-size: 0.82em; font-weight: 500; opacity: 0.7; text-transform: uppercase; letter-spacing: 0.05em; }
+    /* auto-fit + minmax reflows on the real available width with no breakpoint
+       at all, which is what stops the "Cache all matching" button overflowing
+       its column and colliding with the Sort dropdown. */
+    #YouTubeTrailersConfigPage .ytt-filter-row {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+        gap: 1em; margin-top: 1em; align-items: end;
+    }
+    #YouTubeTrailersConfigPage .ytt-search-row { display: flex; gap: 0.6em; align-items: stretch; }
+    #YouTubeTrailersConfigPage .ytt-search-row > input { flex: 1 1 auto; min-width: 0; }
+    #YouTubeTrailersConfigPage .ytt-hint { font-size: 0.85em; opacity: 0.6; margin: 0.6em 0 0; line-height: 1.5; }
+    #YouTubeTrailersConfigPage .ytt-hint code,
+    #YouTubeTrailersConfigPage .ytt-label-help code {
+        background: rgba(127,127,127,0.18);
+        padding: 1px 6px; border-radius: 4px;
+        font-size: 0.92em; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+
+    #YouTubeTrailersConfigPage .ytt-checkbox {
+        appearance: none; -webkit-appearance: none; -moz-appearance: none;
+        width: 22px; height: 22px; flex: 0 0 auto; margin: 0;
+        border: 1.5px solid rgba(127,127,127,0.5);
+        border-radius: 50%;
+        background: transparent; cursor: pointer; position: relative; vertical-align: middle;
+        transition: background-color 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+    }
+    #YouTubeTrailersConfigPage .ytt-checkbox:hover { border-color: rgba(127,127,127,0.75); }
+    #YouTubeTrailersConfigPage .ytt-checkbox:checked { background: #0a84ff; border-color: #0a84ff; }
+    #YouTubeTrailersConfigPage .ytt-checkbox:checked::after {
+        content: ""; position: absolute; inset: 0;
+        background: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path fill='none' stroke='white' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round' d='M4 8.5l3 3 5-6'/></svg>") no-repeat center / 14px;
+    }
+    #YouTubeTrailersConfigPage .ytt-checkbox:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.3); }
+
+    #YouTubeTrailersConfigPage .ytt-results-card {
+        position: relative; margin-top: 1.25em;
+        border: 1px solid rgba(127,127,127,0.18);
+        border-radius: 10px; overflow: hidden;
+        background: rgba(127,127,127,0.04);
+    }
+    #YouTubeTrailersConfigPage .ytt-results-toolbar {
+        display: flex; align-items: center; gap: 0.75em; flex-wrap: wrap;
+        padding: 0.85em 1.1em;
+        border-bottom: 1px solid rgba(127,127,127,0.18);
+        background: rgba(127,127,127,0.05);
+    }
+    #YouTubeTrailersConfigPage .ytt-results-toolbar label { display: inline-flex; align-items: center; gap: 0.5em; font-size: 0.92em; font-weight: 500; cursor: pointer; }
+    #YouTubeTrailersConfigPage .ytt-toolbar-actions { margin-left: auto; display: flex; gap: 0.5em; }
+    #YouTubeTrailersConfigPage .ytt-results-meta { opacity: 0.55; font-size: 0.85em; font-variant-numeric: tabular-nums; }
+    #YouTubeTrailersConfigPage .ytt-results-card .ytt-loading-bar {
+        position: absolute; top: 0; left: 0; right: 0; height: 2px;
+        overflow: hidden; pointer-events: none; opacity: 0;
+        transition: opacity 150ms ease; z-index: 5;
+    }
+    #YouTubeTrailersConfigPage .ytt-results-card.loading .ytt-loading-bar { opacity: 1; }
+    #YouTubeTrailersConfigPage .ytt-results-card .ytt-loading-bar::after {
+        content: ""; position: absolute; inset: 0;
+        background: linear-gradient(90deg, transparent 0%, rgba(10,132,255,0) 20%, rgba(10,132,255,0.95) 50%, rgba(10,132,255,0) 80%, transparent 100%);
+        animation: yttShimmer 1.2s linear infinite;
+    }
+    #YouTubeTrailersConfigPage .ytt-results-card.loading .ytt-scroll { opacity: 0.55; }
+    #YouTubeTrailersConfigPage .ytt-scroll { transition: opacity 150ms ease; }
+
+    #YouTubeTrailersConfigPage .ytt-footer-bar {
+        display: flex; justify-content: space-between; align-items: center; gap: 0.75em;
+        padding-top: 0.85em; margin-top: 0.5em;
+        border-top: 1px solid rgba(127,127,127,0.12);
+        font-size: 0.85em; opacity: 0.75;
+    }
+    #YouTubeTrailersConfigPage .ytt-footer-bar:empty { display: none; }
+    #YouTubeTrailersConfigPage .ytt-mini-action {
+        background: transparent;
+        border: 1px solid rgba(127,127,127,0.25);
+        border-radius: 6px;
+        padding: 0.4em 0.85em;
+        font: inherit; font-size: 0.85em; font-weight: 500;
+        color: rgb(80, 165, 255);
+        cursor: pointer;
+        transition: background-color 120ms ease, border-color 120ms ease;
+    }
+    #YouTubeTrailersConfigPage .ytt-mini-action:hover { background: rgba(10, 132, 255, 0.10); border-color: rgba(10, 132, 255, 0.4); }
+    #YouTubeTrailersConfigPage .ytt-mini-action.danger { color: rgb(255, 110, 100); }
+    #YouTubeTrailersConfigPage .ytt-mini-action.danger:hover { background: rgba(255, 59, 48, 0.12); border-color: rgba(255, 59, 48, 0.4); }
+    #YouTubeTrailersConfigPage .ytt-mini-action:disabled { opacity: 0.45; cursor: not-allowed; }
+
+    /* ── Diagnose report ──────────────────────────────────────────── */
+    #YouTubeTrailersConfigPage .ytt-diag-verdict {
+        display: flex; align-items: center; gap: 0.75em; flex-wrap: wrap;
+        padding: 0.9em 1.1em; border-radius: 8px; margin-bottom: 1em;
+        font-size: 0.95em;
+    }
+    #YouTubeTrailersConfigPage .ytt-diag-verdict.ok   { background: rgba(52,199,89,0.12);  border: 1px solid rgba(52,199,89,0.35); }
+    #YouTubeTrailersConfigPage .ytt-diag-verdict.warn { background: rgba(255,159,10,0.12); border: 1px solid rgba(255,159,10,0.35); }
+    #YouTubeTrailersConfigPage .ytt-diag-verdict.fail { background: rgba(255,59,48,0.12);  border: 1px solid rgba(255,59,48,0.35); }
+    #YouTubeTrailersConfigPage .ytt-diag-step {
+        display: grid; grid-template-columns: 1.6em minmax(0,1fr); gap: 0.75em;
+        padding: 0.85em 0; border-bottom: 1px solid rgba(127,127,127,0.10);
+    }
+    #YouTubeTrailersConfigPage .ytt-diag-step:last-child { border-bottom: none; }
+    #YouTubeTrailersConfigPage .ytt-diag-icon { font-size: 1.05em; line-height: 1.5; text-align: center; }
+    #YouTubeTrailersConfigPage .ytt-diag-name { font-weight: 600; font-size: 0.95em; }
+    #YouTubeTrailersConfigPage .ytt-diag-detail { opacity: 0.75; font-size: 0.9em; line-height: 1.5; margin-top: 0.2em; }
+    #YouTubeTrailersConfigPage .ytt-pre {
+        margin: 0.6em 0 0; padding: 0.8em 1em;
+        background: rgba(0,0,0,0.28);
+        border: 1px solid rgba(127,127,127,0.18);
+        border-radius: 6px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 0.82em; line-height: 1.5;
+        white-space: pre-wrap; word-break: break-word;
+        max-height: 240px; overflow: auto;
+    }
+    #YouTubeTrailersConfigPage details.ytt-details > summary {
+        cursor: pointer; font-size: 0.85em; opacity: 0.75; margin-top: 0.5em;
+        list-style: revert;
+    }
+    #YouTubeTrailersConfigPage details.ytt-details > summary:hover { opacity: 1; }
+
+    /* ── Buttons ──────────────────────────────────────────────────── */
+    #YouTubeTrailersConfigPage .ytt-btn {
+        display: inline-flex; align-items: center; justify-content: center; gap: 0.5em;
+        padding: 0.85em 1.4em; min-height: 44px;
+        border: 1px solid transparent; border-radius: 8px;
+        font: inherit; font-size: 0.95em; font-weight: 500; line-height: 1;
+        cursor: pointer; color: inherit; text-decoration: none; white-space: nowrap; user-select: none;
+        transition: background-color 120ms ease, border-color 120ms ease, transform 60ms ease, box-shadow 120ms ease;
+    }
+    #YouTubeTrailersConfigPage .ytt-btn:focus-visible { outline: 2px solid rgba(10,132,255,0.65); outline-offset: 2px; }
+    #YouTubeTrailersConfigPage .ytt-btn:active { transform: translateY(1px); }
+    #YouTubeTrailersConfigPage .ytt-btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
+    #YouTubeTrailersConfigPage .ytt-btn[aria-busy="true"] { pointer-events: none; cursor: progress; }
+    #YouTubeTrailersConfigPage .ytt-btn[aria-busy="true"]::after {
+        content: ""; display: inline-block; width: 0.95em; height: 0.95em; margin-left: 0.55em;
+        border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%;
+        animation: yttSpin 700ms linear infinite; vertical-align: -0.15em;
+    }
+    @keyframes yttSpin { to { transform: rotate(360deg); } }
+    #YouTubeTrailersConfigPage .ytt-btn-primary {
+        background: linear-gradient(180deg, #0a84ff 0%, #0064d6 100%);
+        color: #fff; border-color: rgba(0,0,0,0.18);
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.18), 0 1px 3px rgba(0,40,90,0.30);
+    }
+    #YouTubeTrailersConfigPage .ytt-btn-primary:hover { background: linear-gradient(180deg, #1a8fff 0%, #0070e0 100%); }
+    #YouTubeTrailersConfigPage .ytt-btn-secondary { background: rgba(127,127,127,0.14); border-color: rgba(127,127,127,0.25); }
+    #YouTubeTrailersConfigPage .ytt-btn-secondary:hover { background: rgba(127,127,127,0.22); border-color: rgba(127,127,127,0.4); }
+    #YouTubeTrailersConfigPage .ytt-btn-danger { background: rgba(255,59,48,0.14); color: rgb(255,110,100); border-color: rgba(255,59,48,0.30); }
+    #YouTubeTrailersConfigPage .ytt-btn-danger:hover { background: rgba(255,59,48,0.24); border-color: rgba(255,59,48,0.50); }
+    #YouTubeTrailersConfigPage .ytt-btn-sm { padding: 0.5em 1em; min-height: 32px; font-size: 0.85em; border-radius: 6px; }
+    #YouTubeTrailersConfigPage .ytt-actions-cell { white-space: nowrap; display: flex; gap: 0.5em; }
+
+    #YouTubeTrailersConfigPage .ytt-form-footer {
+        display: flex; justify-content: flex-end; align-items: center; gap: 0.75em;
+        padding: 1.5em 0 0.25em; margin-top: 1em;
+        border-top: 1px solid rgba(127,127,127,0.18);
+    }
+    #YouTubeTrailersConfigPage .ytt-form-footer-help { opacity: 0.55; font-size: 0.9em; margin-right: auto; }
+
+    /* ── iOS-style toggle (emby-checkbox doesn't paint reliably here) */
+    #YouTubeTrailersConfigPage .ytt-toggle { position: relative; display: inline-block; width: 50px; height: 30px; flex: 0 0 auto; }
+    #YouTubeTrailersConfigPage .ytt-toggle input { position: absolute; opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; z-index: 1; }
+    #YouTubeTrailersConfigPage .ytt-toggle-slider { position: absolute; inset: 0; background: rgba(127,127,127,0.3); border-radius: 30px; transition: background-color 0.2s ease; }
+    #YouTubeTrailersConfigPage .ytt-toggle-slider::before {
+        position: absolute; content: ""; height: 26px; width: 26px; left: 2px; top: 2px;
+        background: white; border-radius: 50%; box-shadow: 0 1px 3px rgba(0,0,0,0.25);
+        transition: transform 0.2s ease;
+    }
+    #YouTubeTrailersConfigPage .ytt-toggle input:checked ~ .ytt-toggle-slider { background: #34c759; }
+    #YouTubeTrailersConfigPage .ytt-toggle input:checked ~ .ytt-toggle-slider::before { transform: translateX(20px); }
+    #YouTubeTrailersConfigPage .ytt-toggle input:focus-visible ~ .ytt-toggle-slider { box-shadow: 0 0 0 3px rgba(10,132,255,0.4); }
+
+    #YouTubeTrailersConfigPage .ytt-scope-list {
+        display: flex; flex-direction: column; gap: 0.5em;
+        max-height: 190px; overflow: auto;
+        padding: 0.7em 0.9em;
+        border: 1px solid rgba(127,127,127,0.22);
+        border-radius: 8px;
+        background: rgba(127,127,127,0.08);
+    }
+    #YouTubeTrailersConfigPage .ytt-scope-list label {
+        display: flex; align-items: center; gap: 0.6em;
+        font-size: 0.92em; cursor: pointer;
+    }
+
+    /* ── Sticky save bar ──────────────────────────────────────────── */
+    #YouTubeTrailersConfigPage .ytt-savebar {
+        position: sticky; bottom: 1em; z-index: 30;
+        display: flex; align-items: center; gap: 0.75em;
+        margin-top: 1.5em; padding: 0.85em 1.1em;
+        border-radius: 10px;
+        border: 1px solid rgba(10,132,255,0.35);
+        background: var(--ytt-sticky-bg, #101012);
+        box-shadow: 0 8px 28px rgba(0,0,0,0.35);
+    }
+    #YouTubeTrailersConfigPage .ytt-savebar[hidden] { display: none; }
+    #YouTubeTrailersConfigPage .ytt-savebar-text { margin-right: auto; font-size: 0.92em; font-weight: 500; }
+
+    /* ── Toasts ───────────────────────────────────────────────────── */
+    #yttToastContainer {
+        position: fixed; bottom: 1.5em; right: 1.5em; z-index: 9999;
+        display: flex; flex-direction: column-reverse; gap: 0.5em; pointer-events: none;
+    }
+    .ytt-toast {
+        background: rgba(40,40,42,0.95); color: #fff;
+        padding: 0.85em 1.25em 0.85em 1em; border-radius: 10px;
+        font-size: 0.92em; line-height: 1.4;
+        backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+        box-shadow: 0 8px 24px rgba(0,0,0,0.30);
+        border: 1px solid rgba(255,255,255,0.08); border-left-width: 3px;
+        transform: translateX(110%); opacity: 0;
+        transition: transform 220ms cubic-bezier(0.2,0.7,0.3,1), opacity 220ms ease;
+        pointer-events: auto; min-width: 240px; max-width: 380px;
+    }
+    .ytt-toast-show { transform: translateX(0); opacity: 1; }
+    .ytt-toast-success { border-left-color: #34c759; }
+    .ytt-toast-error   { border-left-color: #ff3b30; }
+    .ytt-toast-warning { border-left-color: #ff9500; }
+    .ytt-toast-info    { border-left-color: #0a84ff; }
+
+    /* ── Mobile ───────────────────────────────────────────────────── */
+    @container ytt (max-width: 560px) {
+        #YouTubeTrailersConfigPage .ytt-wrap { padding: 1.25em 0.75em 3em; }
+        #YouTubeTrailersConfigPage .ytt-card { padding: 1.25em; border-radius: 10px; margin-bottom: 1em; }
+        #YouTubeTrailersConfigPage .ytt-hero { padding: 0.5em 0 1.25em; margin-bottom: 1.25em; }
+        #YouTubeTrailersConfigPage .ytt-hero-title { font-size: 1.4em; }
+        #YouTubeTrailersConfigPage .ytt-stat-value { font-size: 1.3em; }
+        #YouTubeTrailersConfigPage .ytt-form-row,
+        #YouTubeTrailersConfigPage .ytt-form-row.toggle { grid-template-columns: 1fr; gap: 0.5em; padding: 0.85em 0; }
+        #YouTubeTrailersConfigPage .ytt-search-row { flex-direction: column; }
+        #YouTubeTrailersConfigPage .ytt-search-row > .ytt-btn { width: 100%; }
+        #YouTubeTrailersConfigPage .ytt-coverage-row { grid-template-columns: 1fr; gap: 0.3em; padding: 0.7em 0; border-bottom: 1px solid rgba(127,127,127,0.1); }
+        #YouTubeTrailersConfigPage .ytt-coverage-counts { text-align: left; }
+        #YouTubeTrailersConfigPage .ytt-card-header { flex-direction: column; align-items: flex-start; gap: 0.2em; }
+        #YouTubeTrailersConfigPage .ytt-card-header > .ytt-spacer { display: none; }
+        #YouTubeTrailersConfigPage .ytt-form-footer { flex-direction: column-reverse; align-items: stretch; }
+        #YouTubeTrailersConfigPage .ytt-form-footer-help { margin-right: 0; text-align: center; }
+        #YouTubeTrailersConfigPage .ytt-form-footer .ytt-btn { width: 100%; }
+        #YouTubeTrailersConfigPage .ytt-actions-cell { flex-direction: column; align-items: stretch; }
+        #YouTubeTrailersConfigPage .ytt-table th, #YouTubeTrailersConfigPage .ytt-table td { padding: 0.55em 0.4em; font-size: 0.92em; }
+    }
+
+    /* Toasts are appended to document.body, i.e. OUTSIDE .ytt-wrap, so a
+       container query can never match them — they need a real viewport query. */
+    @media (max-width: 600px) {
+        #yttToastContainer { left: 0.75em; right: 0.75em; bottom: 0.75em; }
+        .ytt-toast { min-width: 0; max-width: none; transform: translateY(20px); }
+        .ytt-toast.ytt-toast-show { transform: translateY(0); }
+    }
+
+    /* Fallback for browsers without container queries: same stacking rules keyed
+       off the viewport. Declarations are identical to the @container block, so
+       where both apply they simply agree. */
+    @media (max-width: 700px) {
+        #YouTubeTrailersConfigPage .ytt-wrap { padding: 1.25em 0.75em 3em; }
+        #YouTubeTrailersConfigPage .ytt-card { padding: 1.25em; border-radius: 10px; margin-bottom: 1em; }
+        #YouTubeTrailersConfigPage .ytt-hero-title { font-size: 1.4em; }
+        #YouTubeTrailersConfigPage .ytt-form-row,
+        #YouTubeTrailersConfigPage .ytt-form-row.toggle { grid-template-columns: 1fr; gap: 0.5em; padding: 0.85em 0; }
+        #YouTubeTrailersConfigPage .ytt-search-row { flex-direction: column; }
+        #YouTubeTrailersConfigPage .ytt-search-row > .ytt-btn { width: 100%; }
+        #YouTubeTrailersConfigPage .ytt-coverage-row { grid-template-columns: 1fr; gap: 0.3em; padding: 0.7em 0; }
+        #YouTubeTrailersConfigPage .ytt-coverage-counts { text-align: left; }
+        #YouTubeTrailersConfigPage .ytt-actions-cell { flex-direction: column; align-items: stretch; }
+    }
+</style>
     <div data-role="content">
         <div class="content-primary">
-            <form id="YouTubeTrailersConfigForm">
-                <div class="checkboxContainer checkboxContainer-withDescription">
-                    <label>
-                        <input is="emby-checkbox" type="checkbox" id="Enabled" />
-                        <span>Enable YouTube trailers</span>
-                    </label>
-                    <div class="fieldDescription">Resolve YouTube trailers server-side and serve them as AVPlayer-native HLS.</div>
+            <div class="ytt-wrap">
+
+                <div class="ytt-hero">
+                    <h1 class="ytt-hero-title">YouTube Trailers</h1>
+                    <p class="ytt-hero-subtitle">
+                        Resolves YouTube trailers server-side with yt-dlp and stream-copy remuxes them into
+                        AVPlayer-native fMP4 HLS, so Apple TV clients play one clean URL with zero on-device
+                        extraction. Each trailer is built once and cached on disk.
+                    </p>
+                    <div class="ytt-hero-meta">
+                        <span class="ytt-badge ytt-badge-muted" id="yttPluginState">checking…</span>
+                        <span class="ytt-badge ytt-badge-muted" id="yttYtDlpBadge">yt-dlp: …</span>
+                        <span class="ytt-badge ytt-badge-muted" id="yttFfmpegBadge">ffmpeg: …</span>
+                        <button type="button" class="ytt-mini-action" id="yttUpdateYtDlp">Update yt-dlp</button>
+                    </div>
                 </div>
 
-                <div class="checkboxContainer checkboxContainer-withDescription">
-                    <label>
-                        <input is="emby-checkbox" type="checkbox" id="ManageYtDlp" />
-                        <span>Manage yt-dlp automatically</span>
-                    </label>
-                    <div class="fieldDescription">The plugin downloads and maintains its own yt-dlp standalone binary for this server's OS — no manual install or Python needed. <strong id="YtDlpVersion">Detected version: …</strong></div>
+                <!-- ── Overview ───────────────────────────────────────── -->
+                <div class="ytt-card">
+                    <div class="ytt-card-header">
+                        <h2 class="ytt-card-title">Overview</h2>
+                        <span class="ytt-card-subtitle" id="yttStatsMeta">Loading…</span>
+                        <span class="ytt-spacer"></span>
+                        <button type="button" class="ytt-btn ytt-btn-secondary ytt-btn-sm" id="yttRefreshStats">Refresh</button>
+                    </div>
+                    <div class="ytt-stat-grid" id="yttStatGrid"></div>
                 </div>
 
-                <div style="display:flex; gap:1em; margin-bottom:1.5em;">
-                    <button is="emby-button" type="button" id="UpdateYtDlp" class="raised button-cancel"><span>Download / update yt-dlp now</span></button>
+                <!-- ── Active jobs (live) ─────────────────────────────── -->
+                <div class="ytt-card" id="yttJobsCard">
+                    <div class="ytt-card-header">
+                        <h2 class="ytt-card-title">Active jobs</h2>
+                        <span class="ytt-card-subtitle" id="yttJobsSummary">Idle</span>
+                        <span class="ytt-spacer"></span>
+                        <button type="button" class="ytt-btn ytt-btn-danger ytt-btn-sm" id="yttCancelAll" style="display:none;">Cancel all</button>
+                    </div>
+                    <div id="yttJobsList"><div class="ytt-empty">No trailer builds running. This list updates live.</div></div>
+                    <div id="yttRecentWrap" style="margin-top:1.5em;">
+                        <div class="ytt-card-header" style="margin-bottom:0.5em;">
+                            <h3 class="ytt-card-title" style="font-size:1em;">Recent activity</h3>
+                            <span class="ytt-card-subtitle">Last builds since the server started</span>
+                        </div>
+                        <div id="yttRecentList"><div class="ytt-empty">Nothing built yet.</div></div>
+                    </div>
                 </div>
 
-                <div class="inputContainer">
-                    <input is="emby-input" type="text" id="YtDlpPath" label="yt-dlp path (optional)" />
-                    <div class="fieldDescription">Leave blank to use the managed binary. Set this only to pin a specific system yt-dlp — when it exists, it overrides the managed one. (Keep yt-dlp updated; YouTube changes periodically break extraction.)</div>
+                <!-- ── Library coverage ───────────────────────────────── -->
+                <div class="ytt-card">
+                    <div class="ytt-card-header">
+                        <h2 class="ytt-card-title">Library coverage</h2>
+                        <span class="ytt-card-subtitle">Items whose metadata has a YouTube trailer link, and how many are cached</span>
+                        <span class="ytt-spacer"></span>
+                        <button type="button" class="ytt-btn ytt-btn-secondary ytt-btn-sm" id="yttRescanIndex">Rescan library</button>
+                    </div>
+                    <div id="yttCoverage"><div class="ytt-empty">Loading…</div></div>
+                    <p class="ytt-hint">
+                        Trailer links come from your metadata providers (TMDb writes them to each item's
+                        <em>Remote Trailers</em>). Items with no YouTube link can't be pre-cached — refresh their
+                        metadata first.
+                    </p>
                 </div>
 
-                <div class="inputContainer">
-                    <input is="emby-input" type="text" id="FfmpegPath" label="ffmpeg path (optional)" />
-                    <div class="fieldDescription">Leave blank to use the server's bundled ffmpeg.</div>
+                <!-- ── Find & prewarm ─────────────────────────────────── -->
+                <div class="ytt-card">
+                    <div class="ytt-card-header">
+                        <h2 class="ytt-card-title">Find &amp; cache trailers</h2>
+                        <span class="ytt-card-subtitle">Build trailers ahead of time so the first play is instant</span>
+                    </div>
+
+                    <div class="ytt-input-group">
+                        <label class="ytt-input-label" for="yttLibSearch">Search</label>
+                        <div class="ytt-search-row">
+                            <input id="yttLibSearch" class="ytt-input" type="text" placeholder="Title or video ID — results update as you type" />
+                            <button type="button" class="ytt-btn ytt-btn-primary" id="yttLibSearchBtn">Search</button>
+                        </div>
+                    </div>
+
+                    <div class="ytt-filter-row">
+                        <div class="ytt-input-group">
+                            <label class="ytt-input-label" for="yttLibFilter">Library</label>
+                            <select id="yttLibFilter" class="ytt-select"><option value="">All libraries</option></select>
+                        </div>
+                        <div class="ytt-input-group">
+                            <label class="ytt-input-label" for="yttCachedFilter">Cache state</label>
+                            <select id="yttCachedFilter" class="ytt-select">
+                                <option value="all">All</option>
+                                <option value="false">Not cached</option>
+                                <option value="true">Cached</option>
+                            </select>
+                        </div>
+                        <div class="ytt-input-group">
+                            <label class="ytt-input-label" for="yttLibSort">Sort</label>
+                            <select id="yttLibSort" class="ytt-select">
+                                <option value="name">Title (A–Z)</option>
+                                <option value="name_desc">Title (Z–A)</option>
+                                <option value="year">Newest first</option>
+                                <option value="uncached">Not cached first</option>
+                                <option value="cached">Cached first</option>
+                            </select>
+                        </div>
+                        <div class="ytt-input-group">
+                            <label class="ytt-input-label">&nbsp;</label>
+                            <button type="button" class="ytt-btn ytt-btn-primary" id="yttPrewarmMatching">Cache all matching</button>
+                        </div>
+                    </div>
+
+                    <div class="ytt-results-card" id="yttLibCard">
+                        <div class="ytt-loading-bar"></div>
+                        <div class="ytt-results-toolbar">
+                            <label><input type="checkbox" class="ytt-checkbox" id="yttLibSelectAll" /><span>Select all visible</span></label>
+                            <span class="ytt-results-meta" id="yttLibMeta"></span>
+                            <span class="ytt-toolbar-actions">
+                                <button type="button" class="ytt-btn ytt-btn-primary ytt-btn-sm" id="yttPrewarmSelected">Cache selected</button>
+                                <button type="button" class="ytt-btn ytt-btn-danger ytt-btn-sm" id="yttDeleteSelected">Delete cached</button>
+                            </span>
+                        </div>
+                        <div class="ytt-scroll" id="yttLibResults"><div class="ytt-empty">Loading…</div></div>
+                    </div>
+                    <div class="ytt-footer-bar" id="yttLibFooter"></div>
                 </div>
 
-                <div class="inputContainer">
-                    <input is="emby-input" type="text" id="CacheDirectory" label="Cache directory (optional)" />
-                    <div class="fieldDescription">Leave blank to use a "youtube-trailers" folder under Jellyfin's cache path. Changing this does not migrate existing bundles — old ones remain at the previous path (clear them there manually).</div>
+                <!-- ── Cached bundles ─────────────────────────────────── -->
+                <div class="ytt-card">
+                    <div class="ytt-card-header">
+                        <h2 class="ytt-card-title">Cached trailers on disk</h2>
+                        <span class="ytt-card-subtitle">Everything the plugin has built, including trailers not linked to any library item</span>
+                        <span class="ytt-spacer"></span>
+                        <button type="button" class="ytt-btn ytt-btn-secondary ytt-btn-sm" id="yttRefreshBundles">Refresh</button>
+                        <button type="button" class="ytt-btn ytt-btn-danger ytt-btn-sm" id="yttClearCache">Clear all</button>
+                    </div>
+
+                    <div class="ytt-filter-row" style="margin-top:0;">
+                        <div class="ytt-input-group">
+                            <label class="ytt-input-label" for="yttBundleSearch">Search</label>
+                            <input id="yttBundleSearch" class="ytt-input" type="text" placeholder="Title or video ID" />
+                        </div>
+                        <div class="ytt-input-group">
+                            <label class="ytt-input-label" for="yttBundleStatus">Status</label>
+                            <select id="yttBundleStatus" class="ytt-select">
+                                <option value="all">All</option>
+                                <option value="complete">Complete</option>
+                                <option value="partial">Partial / interrupted</option>
+                            </select>
+                        </div>
+                        <div class="ytt-input-group">
+                            <label class="ytt-input-label" for="yttBundleSort">Sort</label>
+                            <select id="yttBundleSort" class="ytt-select">
+                                <option value="recent">Most recent</option>
+                                <option value="oldest">Oldest build</option>
+                                <option value="unused">Least recently used</option>
+                                <option value="size">Largest</option>
+                                <option value="size_asc">Smallest</option>
+                                <option value="name">Title (A–Z)</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="ytt-results-card" id="yttBundleCard">
+                        <div class="ytt-loading-bar"></div>
+                        <div class="ytt-scroll" id="yttBundleResults"><div class="ytt-empty">Loading…</div></div>
+                    </div>
+                    <div class="ytt-footer-bar" id="yttBundleFooter"></div>
                 </div>
 
-                <h3 style="margin-top:2em;">Advanced</h3>
+                <!-- ── Troubleshooting ────────────────────────────────── -->
+                <div class="ytt-card">
+                    <div class="ytt-card-header">
+                        <h2 class="ytt-card-title">Troubleshooting</h2>
+                        <span class="ytt-card-subtitle">Find out exactly why a trailer won't download</span>
+                    </div>
 
-                <div class="inputContainer">
-                    <input is="emby-input" type="text" id="FormatSelector" label="yt-dlp format selector" />
-                    <div class="fieldDescription">Default prefers 1080p AVC1 + AAC. Lower to e.g. <code>height&lt;=720</code> for less bandwidth/CPU.</div>
+                    <div class="ytt-input-group">
+                        <label class="ytt-input-label" for="yttDiagInput">Diagnose a trailer</label>
+                        <div class="ytt-search-row">
+                            <input id="yttDiagInput" class="ytt-input" type="text" placeholder="Paste a YouTube URL or 11-character video ID" />
+                            <button type="button" class="ytt-btn ytt-btn-primary" id="yttDiagRun">Run diagnosis</button>
+                            <button type="button" class="ytt-btn ytt-btn-secondary" id="yttDiagCache">Cache it</button>
+                        </div>
+                    </div>
+                    <p class="ytt-hint">
+                        Walks the whole pipeline for one video — yt-dlp and ffmpeg binaries, YouTube metadata,
+                        format selection, CDN reachability, then a real 3-second stream-copy — and tells you which
+                        stage breaks. Each stage failure has a different fix, which is why "no URLs" on its own
+                        is never enough to act on.
+                    </p>
+                    <div id="yttDiagReport" style="margin-top:1.25em;"></div>
+
+                    <div class="ytt-card-header" style="margin: 2em 0 0.5em;">
+                        <h3 class="ytt-card-title" style="font-size:1em;">Recent failures</h3>
+                        <span class="ytt-card-subtitle" id="yttFailMeta"></span>
+                        <span class="ytt-spacer"></span>
+                        <button type="button" class="ytt-btn ytt-btn-secondary ytt-btn-sm" id="yttRefreshFailures">Refresh</button>
+                        <button type="button" class="ytt-btn ytt-btn-secondary ytt-btn-sm" id="yttClearFailures">Retry blocked videos</button>
+                    </div>
+                    <div id="yttFailures"><div class="ytt-empty">No failures recorded.</div></div>
+                    <p class="ytt-hint">
+                        A failed trailer is remembered briefly so repeat requests fail fast and clients fall back to
+                        the next candidate instead of stalling. <strong>Retry blocked videos</strong> clears both the
+                        failure log and that block list — use it after updating yt-dlp or fixing a proxy.
+                    </p>
                 </div>
 
-                <div class="inputContainer">
-                    <input is="emby-input" type="text" id="Proxy" label="Proxy (optional)" />
-                    <div class="fieldDescription">e.g. <code>http://host:port</code> or <code>socks5://host:port</code>. Applied to <strong>both</strong> yt-dlp and the ffmpeg fetch — use this for geo-blocked trailers (the actual download must be proxied too, not just resolution).</div>
+                <!-- ── Settings ───────────────────────────────────────── -->
+                <div class="ytt-card">
+                    <div class="ytt-card-header"><h2 class="ytt-card-title">General</h2></div>
+
+                    <div class="ytt-form-row toggle">
+                        <div class="ytt-label">
+                            <span class="ytt-label-name">Enable YouTube trailers</span>
+                            <span class="ytt-label-help">When off, every trailer endpoint returns 404 and clients fall back to their own behaviour.</span>
+                        </div>
+                        <label class="ytt-toggle"><input id="Enabled" type="checkbox" /><span class="ytt-toggle-slider"></span></label>
+                    </div>
+
+                    <div class="ytt-form-row toggle">
+                        <div class="ytt-label">
+                            <span class="ytt-label-name">Manage yt-dlp automatically</span>
+                            <span class="ytt-label-help">Downloads and maintains the official standalone yt-dlp binary for this server's OS — no manual install, no Python.</span>
+                        </div>
+                        <label class="ytt-toggle"><input id="ManageYtDlp" type="checkbox" /><span class="ytt-toggle-slider"></span></label>
+                    </div>
+
+                    <div class="ytt-form-row">
+                        <div class="ytt-label">
+                            <span class="ytt-label-name">yt-dlp path</span>
+                            <span class="ytt-label-help">Optional. Set only to pin a system yt-dlp; when the file exists it overrides the managed copy.</span>
+                        </div>
+                        <input id="YtDlpPath" type="text" class="ytt-input" placeholder="(managed)" />
+                    </div>
+
+                    <div class="ytt-form-row">
+                        <div class="ytt-label">
+                            <span class="ytt-label-name">ffmpeg path</span>
+                            <span class="ytt-label-help">Optional. Blank uses the server's bundled ffmpeg.</span>
+                        </div>
+                        <input id="FfmpegPath" type="text" class="ytt-input" placeholder="(bundled)" />
+                    </div>
+
+                    <div class="ytt-form-row">
+                        <div class="ytt-label">
+                            <span class="ytt-label-name">Cache directory</span>
+                            <span class="ytt-label-help">Blank uses a <code>youtube-trailers</code> folder under Jellyfin's cache path. Changing this doesn't migrate existing bundles.</span>
+                        </div>
+                        <input id="CacheDirectory" type="text" class="ytt-input" placeholder="(default)" />
+                    </div>
                 </div>
 
-                <div class="inputContainer">
-                    <input is="emby-input" type="text" id="YtDlpArguments" label="Extra yt-dlp arguments" />
-                    <div class="fieldDescription">Space-separated. Use for <code>--proxy URL</code> (geo-blocked trailers), <code>--cookies FILE</code> / <code>--cookies-from-browser B</code> (age-restricted or bot-checked), <code>--extractor-args</code> (PO tokens), <code>--limit-rate</code>. Wrap values with spaces in double quotes.</div>
+                <div class="ytt-card">
+                    <div class="ytt-card-header">
+                        <h2 class="ytt-card-title">Automatic trailers</h2>
+                        <span class="ytt-card-subtitle">Cache trailers before anyone asks for them</span>
+                    </div>
+
+                    <div class="ytt-form-row toggle">
+                        <div class="ytt-label">
+                            <span class="ytt-label-name">Cache trailers for newly added media</span>
+                            <span class="ytt-label-help">Builds the trailer in the background whenever the scanner adds or refreshes an item, so it plays instantly the first time. Off by default — a first library scan can queue thousands of jobs.</span>
+                        </div>
+                        <label class="ytt-toggle"><input id="PrewarmOnLibraryAdd" type="checkbox" /><span class="ytt-toggle-slider"></span></label>
+                    </div>
+
+                    <div class="ytt-form-row">
+                        <div class="ytt-label">
+                            <span class="ytt-label-name">Delay after an item is added (seconds)</span>
+                            <span class="ytt-label-help">Jellyfin announces a new file before the metadata provider attaches the trailer link, so the lookup waits. Raise it if your provider is slow.</span>
+                        </div>
+                        <input id="LibraryAddDelaySeconds" type="number" class="ytt-input" min="0" max="3600" />
+                    </div>
+
+                    <div class="ytt-form-row toggle">
+                        <div class="ytt-label">
+                            <span class="ytt-label-name">Cache every trailer on an item</span>
+                            <span class="ytt-label-help">Items often list several (teaser, official trailer, clip). By default only the first — the one clients play — is cached.</span>
+                        </div>
+                        <label class="ytt-toggle"><input id="PrewarmAllTrailersPerItem" type="checkbox" /><span class="ytt-toggle-slider"></span></label>
+                    </div>
+
+                    <div class="ytt-form-row toggle">
+                        <div class="ytt-label">
+                            <span class="ytt-label-name">Daily sweep of the whole library</span>
+                            <span class="ytt-label-help">Runs at 3 AM and caches any linked trailer that isn't on disk yet. Backstop for items imported while the listener was off, or whose metadata landed late. Also runnable on demand from Scheduled Tasks.</span>
+                        </div>
+                        <label class="ytt-toggle"><input id="EnableLibraryPrewarmTask" type="checkbox" /><span class="ytt-toggle-slider"></span></label>
+                    </div>
+
+                    <div class="ytt-form-row">
+                        <div class="ytt-label">
+                            <span class="ytt-label-name">Libraries to cache automatically</span>
+                            <span class="ytt-label-help">Applies to both the live listener and the daily sweep. Leave everything unticked for all libraries — useful to keep Home Videos or Music Videos from burning build slots.</span>
+                        </div>
+                        <div id="yttLibraryScope" class="ytt-scope-list"><span class="ytt-label-help">Loading…</span></div>
+                    </div>
+
+                    <div class="ytt-form-row">
+                        <div class="ytt-label">
+                            <span class="ytt-label-name">Max trailers per sweep</span>
+                            <span class="ytt-label-help">Keeps the first run on a large library from becoming an all-night crawl. 0 = no cap.</span>
+                        </div>
+                        <input id="MaxPrewarmPerRun" type="number" class="ytt-input" min="0" max="100000" />
+                    </div>
                 </div>
 
-                <div class="inputContainer">
-                    <input is="emby-input" type="number" id="ResolveTimeoutSeconds" label="Resolve timeout (seconds)" min="10" max="300" />
+                <div class="ytt-card">
+                    <div class="ytt-card-header"><h2 class="ytt-card-title">Playback &amp; quality</h2></div>
+
+                    <div class="ytt-form-row">
+                        <div class="ytt-label">
+                            <span class="ytt-label-name">Trailer quality</span>
+                            <span class="ytt-label-help">All presets pin H.264 + AAC, which is what Apple devices decode in hardware and what can be copied into fMP4 without re-encoding. Lower quality means smaller cache and faster builds.</span>
+                        </div>
+                        <select id="QualityPreset" class="ytt-select">
+                            <option value="best">Best available</option>
+                            <option value="1080p">Up to 1080p (recommended)</option>
+                            <option value="720p">Up to 720p</option>
+                            <option value="480p">Up to 480p</option>
+                            <option value="custom">Custom yt-dlp selector…</option>
+                        </select>
+                    </div>
+
+                    <div class="ytt-form-row" id="yttCustomFormatRow">
+                        <div class="ytt-label">
+                            <span class="ytt-label-name">Custom format selector</span>
+                            <span class="ytt-label-help">Raw yt-dlp format expression. Only used while quality is set to <em>Custom</em>. Picking VP9/AV1/Opus here forces a full transcode instead of a stream copy.</span>
+                        </div>
+                        <input id="FormatSelector" type="text" class="ytt-input" />
+                    </div>
+
+                    <div class="ytt-form-row">
+                        <div class="ytt-label">
+                            <span class="ytt-label-name">Proxy</span>
+                            <span class="ytt-label-help">e.g. <code>http://host:port</code> or <code>socks5://host:port</code>. Applied to <strong>both</strong> yt-dlp and the ffmpeg fetch — use this for geo-blocked trailers, since the download must be proxied too, not just the resolution.</span>
+                        </div>
+                        <input id="Proxy" type="text" class="ytt-input" placeholder="(direct)" />
+                    </div>
+
+                    <div class="ytt-form-row">
+                        <div class="ytt-label">
+                            <span class="ytt-label-name">Cookies from browser</span>
+                            <span class="ytt-label-help">Fixes <em>"Sign in to confirm you're not a bot"</em> and age-restricted trailers — the most common reason extraction fails. Needs a real browser profile on the <strong>server</strong>; headless or Docker installs should use a cookies file instead.</span>
+                        </div>
+                        <select id="CookiesFromBrowser" class="ytt-select">
+                            <option value="">None</option>
+                            <option value="chrome">Chrome</option>
+                            <option value="firefox">Firefox</option>
+                            <option value="edge">Edge</option>
+                            <option value="safari">Safari</option>
+                            <option value="brave">Brave</option>
+                            <option value="chromium">Chromium</option>
+                            <option value="opera">Opera</option>
+                            <option value="vivaldi">Vivaldi</option>
+                        </select>
+                    </div>
+
+                    <div class="ytt-form-row">
+                        <div class="ytt-label">
+                            <span class="ytt-label-name">Cookies file</span>
+                            <span class="ytt-label-help">Absolute path to a Netscape-format <code>cookies.txt</code> exported from a signed-in browser. Takes precedence over the browser option and is the one that works on headless servers.</span>
+                        </div>
+                        <input id="CookiesFile" type="text" class="ytt-input" placeholder="/config/cookies.txt" />
+                    </div>
+
+                    <div class="ytt-form-row">
+                        <div class="ytt-label">
+                            <span class="ytt-label-name">Build speed limit (× realtime)</span>
+                            <span class="ytt-label-help">Caps download speed during builds so a library-wide sweep can't saturate your uplink. 0 = unlimited. Applied to ffmpeg, which is what actually downloads the video. Must be at least 1 — slower than realtime and builds stall.</span>
+                        </div>
+                        <input id="BuildSpeedLimit" type="number" class="ytt-input" min="0" max="50" step="0.5" />
+                    </div>
+
+                    <div class="ytt-form-row">
+                        <div class="ytt-label">
+                            <span class="ytt-label-name">Extra yt-dlp arguments</span>
+                            <span class="ytt-label-help">Space-separated. <code>--cookies FILE</code> or <code>--cookies-from-browser B</code> for age-restricted / bot-checked videos, <code>--extractor-args</code> for PO tokens, <code>--limit-rate</code>. Quote values containing spaces.</span>
+                        </div>
+                        <input id="YtDlpArguments" type="text" class="ytt-input" placeholder="(none)" />
+                    </div>
+
+                    <div class="ytt-form-row">
+                        <div class="ytt-label">
+                            <span class="ytt-label-name">Max concurrent builds</span>
+                            <span class="ytt-label-help">Server-side trailer builds running at once. Requires a server restart to take effect. <span id="yttConcurrencyHint" style="color:#7fb3ff;"></span></span>
+                        </div>
+                        <input id="MaxConcurrentBuilds" type="number" class="ytt-input" min="1" max="16" />
+                    </div>
+
+                    <div class="ytt-form-row">
+                        <div class="ytt-label">
+                            <span class="ytt-label-name">Resolve timeout (seconds)</span>
+                            <span class="ytt-label-help">Hard ceiling on how long a client waits for the first playable segment.</span>
+                        </div>
+                        <input id="ResolveTimeoutSeconds" type="number" class="ytt-input" min="10" max="300" />
+                    </div>
+
+                    <div class="ytt-form-row">
+                        <div class="ytt-label">
+                            <span class="ytt-label-name">VOD grace (seconds)</span>
+                            <span class="ytt-label-help">How long a full-screen request waits for the remux to finish so AVKit shows a real scrubber instead of the live UI. Kept small — on timeout playback starts live anyway.</span>
+                        </div>
+                        <input id="CompleteWaitSeconds" type="number" class="ytt-input" min="0" max="60" />
+                    </div>
                 </div>
 
-                <div class="inputContainer">
-                    <input is="emby-input" type="number" id="MaxConcurrentBuilds" label="Max concurrent builds" min="1" max="16" />
-                    <div class="fieldDescription">Server-side trailer builds running at once. Raise on a powerful server, lower on a weak one. Requires a server restart to take effect.</div>
+                <div class="ytt-card">
+                    <div class="ytt-card-header"><h2 class="ytt-card-title">Cache &amp; diagnostics</h2></div>
+
+                    <div class="ytt-form-row">
+                        <div class="ytt-label">
+                            <span class="ytt-label-name">Max bundle age (days)</span>
+                            <span class="ytt-label-help">The daily prune task evicts bundles not used within this many days. 0 = no limit.</span>
+                        </div>
+                        <input id="MaxAgeDays" type="number" class="ytt-input" min="0" max="3650" />
+                    </div>
+
+                    <div class="ytt-form-row">
+                        <div class="ytt-label">
+                            <span class="ytt-label-name">Max cache size (GB)</span>
+                            <span class="ytt-label-help">Least-recently-used bundles are trimmed until under this size. 0 = no limit.</span>
+                        </div>
+                        <input id="MaxCacheGigabytes" type="number" class="ytt-input" min="0" max="10240" />
+                    </div>
+
+                    <div class="ytt-form-row">
+                        <div class="ytt-label">
+                            <span class="ytt-label-name">Remember failures for (minutes)</span>
+                            <span class="ytt-label-help">A failed video fast-fails for this long so clients fall back quickly instead of re-running the full timeout. Set 0 while debugging one specific video to retry on every request.</span>
+                        </div>
+                        <input id="FailureCacheMinutes" type="number" class="ytt-input" min="0" max="1440" />
+                    </div>
+
+                    <div class="ytt-form-row">
+                        <div class="ytt-label">
+                            <span class="ytt-label-name">No-segment timeout (seconds)</span>
+                            <span class="ytt-label-help">Kills a build that hasn't produced its first segment in time. A dead CDN edge makes ffmpeg reconnect forever without exiting, so without this the client waits out the full resolve timeout.</span>
+                        </div>
+                        <input id="NoSegmentTimeoutSeconds" type="number" class="ytt-input" min="5" max="120" />
+                    </div>
+
+                    <div class="ytt-form-row toggle">
+                        <div class="ytt-label">
+                            <span class="ytt-label-name">Verbose logging</span>
+                            <span class="ytt-label-help">Logs the full yt-dlp / ffmpeg command line for every invocation at Info level. Noisy, but the fastest way to see exactly what ran on your server.</span>
+                        </div>
+                        <label class="ytt-toggle"><input id="VerboseLogging" type="checkbox" /><span class="ytt-toggle-slider"></span></label>
+                    </div>
+
+                    <div class="ytt-form-footer">
+                        <span class="ytt-form-footer-help">All settings apply immediately — no server restart needed.</span>
+                        <button type="button" class="ytt-btn ytt-btn-primary" id="yttSaveBtn">Save settings</button>
+                    </div>
                 </div>
 
-                <h3 style="margin-top:2em;">Cache</h3>
+            </div>
 
-                <div class="inputContainer">
-                    <input is="emby-input" type="number" id="MaxAgeDays" label="Max bundle age (days, 0 = no limit)" min="0" />
-                    <div class="fieldDescription">The daily prune task evicts bundles not used within this many days.</div>
-                </div>
-
-                <div class="inputContainer">
-                    <input is="emby-input" type="number" id="MaxCacheGigabytes" label="Max cache size (GB, 0 = no limit)" min="0" />
-                    <div class="fieldDescription">The daily prune task trims least-recently-used bundles until under this size.</div>
-                </div>
-
-                <div class="fieldDescription" id="CacheStats" style="margin:1em 0;">Cache: …</div>
-
-                <div style="display:flex; gap:1em; margin-bottom:2em;">
-                    <button is="emby-button" type="button" id="RefreshStats" class="raised button-cancel"><span>Refresh stats</span></button>
-                    <button is="emby-button" type="button" id="ClearCache" class="raised button-cancel"><span>Clear cache now</span></button>
-                </div>
-
-                <button is="emby-button" type="submit" class="raised button-submit block"><span>Save</span></button>
-            </form>
+            <!-- Follows the user down the page: the settings live across four
+                 cards, so a Save button anchored to the last one is invisible
+                 while editing the first. Only appears once something changed. -->
+            <div class="ytt-savebar" id="yttSaveBar" hidden>
+                <span class="ytt-savebar-text">You have unsaved changes</span>
+                <button type="button" class="ytt-btn ytt-btn-secondary ytt-btn-sm" id="yttRevertBtn">Revert</button>
+                <button type="button" class="ytt-btn ytt-btn-primary ytt-btn-sm" id="yttSaveBarBtn">Save settings</button>
+            </div>
         </div>
     </div>
 
-    <script type="text/javascript">
-        (function () {
-            var pluginId = "00e99003-cf35-4a65-bf44-35104dfeb76a";
+<script type="text/javascript">
+(function () {
+    var pluginId = "00e99003-cf35-4a65-bf44-35104dfeb76a";
+    var page = document.querySelector('#YouTubeTrailersConfigPage');
 
-            function loadStats(page) {
-                ApiClient.ajax({ type: "GET", url: ApiClient.getUrl("Trailers/admin/stats"), dataType: "json" })
-                    .then(function (s) {
-                        page.querySelector("#CacheStats").textContent =
-                            "Cache: " + s.count + " trailer(s), " + s.megabytes + " MB on disk.";
-                    })
-                    .catch(function () {
-                        page.querySelector("#CacheStats").textContent = "Cache: unavailable.";
-                    });
+    // Poll timers + last-seen payloads, so re-renders (expand/collapse) don't
+    // need a refetch.
+    var jobsTimer = null, jobsPolling = false, lastJobs = null, lastStats = null, lastActiveCount = 0;
+    var libRows = [], libTotal = 0, libSelection = {};
+    var bundleRows = [], bundleTotal = 0;
+    var libSearchDebounce = null, bundleSearchDebounce = null;
+    var scopeSelection = {}, baseline = null, dirty = false;
+    var libBusyIds = {}, libQuietRefresh = null;
+    var PAGE_SIZE = 100;
+
+    // ── Plumbing ──────────────────────────────────────────────────────────
+
+    // Jellyfin's API can serialize either PascalCase or camelCase depending on
+    // the negotiated formatter. Normalizing keys to PascalCase once, here, keeps
+    // every render function free of dual-case lookups.
+    function pascalize(value) {
+        if (Array.isArray(value)) return value.map(pascalize);
+        if (value === null || typeof value !== 'object') return value;
+        var out = {};
+        Object.keys(value).forEach(function (k) {
+            out[k.charAt(0).toUpperCase() + k.slice(1)] = pascalize(value[k]);
+        });
+        return out;
+    }
+
+    function api(path, opts) {
+        return ApiClient.ajax(Object.assign({
+            type: 'GET',
+            url: ApiClient.getUrl('Trailers/admin/' + path),
+            dataType: 'json'
+        }, opts || {})).then(pascalize);
+    }
+
+    function post(path, body) {
+        return api(path, body === undefined
+            ? { type: 'POST' }
+            : { type: 'POST', contentType: 'application/json', data: JSON.stringify(body) });
+    }
+
+    // Sticky table headers need a genuinely opaque background or scrolled rows
+    // read straight through them. Jellyfin gives us nothing to inherit — it
+    // forces body{background-color:transparent!important} and paints the page
+    // color on <html>, with a different value in every theme — so walk up from
+    // this page to the first ancestor whose background is fully opaque and hand
+    // that color to the CSS as a custom property. Every ancestor in our own
+    // card markup is a translucent grey, so the alpha === 1 test is what skips
+    // them and lands on <html>.
+    function applyStickyBackground() {
+        for (var el = page; el; el = el.parentElement) {
+            var bg = window.getComputedStyle(el).backgroundColor;
+            var match = bg && bg.match(/^rgba?\(([^)]+)\)$/);
+            if (!match) continue;
+            var parts = match[1].split(',').map(function (v) { return parseFloat(v); });
+            if (parts.length < 3 || parts.some(isNaN)) continue;
+            var alpha = parts.length > 3 ? parts[3] : 1;
+            if (alpha === 1) {
+                page.style.setProperty('--ytt-sticky-bg',
+                    'rgb(' + parts[0] + ',' + parts[1] + ',' + parts[2] + ')');
+                return;
             }
+        }
+    }
 
-            function loadVersion(page) {
-                ApiClient.ajax({ type: "GET", url: ApiClient.getUrl("Trailers/admin/version"), dataType: "json" })
-                    .then(function (v) {
-                        page.querySelector("#YtDlpVersion").textContent = "Detected version: " + v.ytDlp;
-                    })
-                    .catch(function () {
-                        page.querySelector("#YtDlpVersion").textContent = "Detected version: unavailable";
-                    });
+    function esc(s) {
+        return String(s === null || s === undefined ? '' : s)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+
+    function fmtBytes(n) {
+        if (!n) return '0 MB';
+        if (n < 1024 * 1024) return (n / 1024).toFixed(0) + ' KB';
+        if (n < 1024 * 1024 * 1024) return (n / (1024 * 1024)).toFixed(1) + ' MB';
+        return (n / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+    }
+
+    function fmtDuration(seconds) {
+        if (!seconds && seconds !== 0) return '—';
+        var s = Math.round(seconds);
+        var m = Math.floor(s / 60);
+        return m + ':' + String(s % 60).padStart(2, '0');
+    }
+
+    function fmtElapsed(startUtc, nowUtc) {
+        if (!startUtc) return '—';
+        var start = Date.parse(startUtc.endsWith('Z') ? startUtc : startUtc + 'Z');
+        var now = nowUtc ? Date.parse(nowUtc.endsWith('Z') ? nowUtc : nowUtc + 'Z') : Date.now();
+        var s = Math.max(0, Math.round((now - start) / 1000));
+        return s < 60 ? s + 's' : Math.floor(s / 60) + 'm ' + (s % 60) + 's';
+    }
+
+    function fmtAgo(utc) {
+        if (!utc) return '—';
+        // An empty bundle directory yields DateTime.MinValue; rendering that as
+        // "739000d ago" is worse than saying nothing.
+        if (utc < '2000') return '—';
+        var t = Date.parse(utc.endsWith('Z') ? utc : utc + 'Z');
+        var s = Math.max(0, Math.round((Date.now() - t) / 1000));
+        if (s < 60) return s + 's ago';
+        if (s < 3600) return Math.floor(s / 60) + 'm ago';
+        if (s < 86400) return Math.floor(s / 3600) + 'h ago';
+        return Math.floor(s / 86400) + 'd ago';
+    }
+
+    function toast(message, type) {
+        var box = document.querySelector('#yttToastContainer');
+        if (!box) {
+            box = document.createElement('div');
+            box.id = 'yttToastContainer';
+            document.body.appendChild(box);
+        }
+        var el = document.createElement('div');
+        el.className = 'ytt-toast ytt-toast-' + (type || 'info');
+        el.textContent = message;
+        box.appendChild(el);
+        requestAnimationFrame(function () { requestAnimationFrame(function () { el.classList.add('ytt-toast-show'); }); });
+        setTimeout(function () {
+            el.classList.remove('ytt-toast-show');
+            setTimeout(function () { el.remove(); }, 260);
+        }, 4200);
+    }
+
+    function errText(err) {
+        return (err && (err.message || err.statusText)) || 'unknown error';
+    }
+
+    function withBusy(btn, fn) {
+        if (btn) btn.setAttribute('aria-busy', 'true');
+        return Promise.resolve().then(fn).finally(function () {
+            if (btn) btn.removeAttribute('aria-busy');
+        });
+    }
+
+    function setLoading(cardId, on) {
+        var card = document.querySelector(cardId);
+        if (card) card.classList.toggle('loading', !!on);
+    }
+
+    // ── Overview ──────────────────────────────────────────────────────────
+
+    function statTile(value, label, sub, alert) {
+        return '<div class="' + (alert ? 'ytt-stat-alert' : '') + '">' +
+            '<div class="ytt-stat-value">' + esc(value) + '</div>' +
+            '<div class="ytt-stat-label">' + esc(label) + '</div>' +
+            (sub ? '<div class="ytt-stat-sub">' + esc(sub) + '</div>' : '') +
+            '</div>';
+    }
+
+    function renderStats(s) {
+        lastStats = s;
+        var covered = s.LibraryItemsWithTrailers > 0
+            ? Math.round(s.LibraryItemsCached * 100 / s.LibraryItemsWithTrailers)
+            : 0;
+
+        document.querySelector('#yttStatGrid').innerHTML =
+            statTile(s.CompleteBundles, 'Trailers cached',
+                s.CachedBundles > s.CompleteBundles ? (s.CachedBundles - s.CompleteBundles) + ' partial' : 'on disk') +
+            statTile(fmtBytes(s.CacheBytes), 'Disk used') +
+            statTile(s.ActiveJobs, 'Active builds', 'max ' + s.MaxConcurrentBuilds + ' at once') +
+            statTile(s.PendingPrewarm, 'Queued', 'waiting to build') +
+            statTile(covered + '%', 'Library covered',
+                s.LibraryItemsCached + ' of ' + s.LibraryItemsWithTrailers + ' items') +
+            statTile(s.Failures24h, 'Failures (24h)',
+                s.BlockedVideos > 0 ? s.BlockedVideos + ' blocked' : 'nothing blocked',
+                s.Failures24h > 0) +
+            statTile(s.SuccessRate === null || s.SuccessRate === undefined ? '—' : s.SuccessRate + '%',
+                'Build success', 'of recent builds',
+                s.SuccessRate !== null && s.SuccessRate !== undefined && s.SuccessRate < 80);
+
+        document.querySelector('#yttStatsMeta').textContent =
+            s.LibraryTrailerLinks + ' YouTube link(s) across ' + s.Libraries.length + ' librar' +
+            (s.Libraries.length === 1 ? 'y' : 'ies') + ' · index built ' + fmtAgo(s.IndexBuiltUtc);
+
+        var state = document.querySelector('#yttPluginState');
+        state.textContent = s.Enabled ? 'Enabled' : 'Disabled';
+        state.className = 'ytt-badge ' + (s.Enabled ? 'ytt-badge-ok' : 'ytt-badge-fail');
+
+        var hint = document.querySelector('#yttConcurrencyHint');
+        if (hint) hint.textContent = 'This server reports ' + s.CpuCores + ' logical core(s).';
+
+        renderCoverage(s);
+        populateLibraryFilter(s.Libraries);
+        renderLibraryScope();
+    }
+
+    function renderCoverage(s) {
+        var box = document.querySelector('#yttCoverage');
+        // An index failure and a genuinely empty library both produce zero rows,
+        // but they need completely different responses — never let the first
+        // masquerade as the second.
+        if (s.IndexError) {
+            box.innerHTML = '<div class="ytt-diag-verdict fail">' +
+                '<span style="color:rgb(255,110,100);">✕</span>' +
+                '<div><strong>Jellyfin could not list your libraries.</strong>' +
+                '<div class="ytt-diag-detail">' + esc(s.IndexError) + '</div>' +
+                '<div class="ytt-diag-detail">Automatic caching and coverage are unavailable until this is resolved. ' +
+                'This is a Jellyfin-side error, not a plugin one — a <code>no such column</code> message means the ' +
+                'server database schema does not match the running server version.</div></div></div>';
+            return;
+        }
+        if (!s.Libraries || s.Libraries.length === 0) {
+            box.innerHTML = '<div class="ytt-empty">No libraries found.</div>';
+            return;
+        }
+        box.innerHTML = s.Libraries.map(function (lib) {
+            var pct = lib.ItemsWithTrailers > 0
+                ? Math.round(lib.CachedTrailers * 100 / lib.ItemsWithTrailers) : 0;
+            return '<div class="ytt-coverage-row">' +
+                '<div><div>' + esc(lib.Name) + '</div>' +
+                    '<div class="ytt-sub">' + lib.ItemsWithTrailers + ' of ' + lib.TotalItems + ' items have a YouTube trailer link</div></div>' +
+                '<div class="ytt-coverage-bar"><div class="ytt-coverage-bar-fill" style="width:' + pct + '%"></div></div>' +
+                '<div class="ytt-coverage-counts">' + lib.CachedTrailers + ' / ' + lib.ItemsWithTrailers + ' cached</div>' +
+                '<div><button type="button" class="ytt-mini-action yttCoverageWarm" data-id="' + esc(lib.Id) + '" data-name="' + esc(lib.Name) + '"' +
+                    (lib.CachedTrailers >= lib.ItemsWithTrailers ? ' disabled' : '') + '>Cache the rest</button></div>' +
+                '</div>';
+        }).join('');
+
+        box.querySelectorAll('.yttCoverageWarm').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                withBusy(btn, function () {
+                    return post('prewarm/matching', { LibraryId: btn.dataset.id, Cached: 'false' })
+                        .then(function (r) {
+                            toast('Queued ' + r.Changed + ' trailer(s) from ' + btn.dataset.name, 'success');
+                            refreshStats();
+                            pollJobs();
+                        })
+                        .catch(function (e) { toast('Queue failed: ' + errText(e), 'error'); });
+                });
+            });
+        });
+    }
+
+    function populateLibraryFilter(libraries) {
+        var sel = document.querySelector('#yttLibFilter');
+        var current = sel.value;
+        sel.innerHTML = '<option value="">All libraries</option>' + libraries.map(function (l) {
+            return '<option value="' + esc(l.Id) + '">' + esc(l.Name) + '</option>';
+        }).join('');
+        if (current) sel.value = current;
+    }
+
+    function refreshStats(rescan) {
+        return api('stats' + (rescan ? '?refreshIndex=true' : ''))
+            .then(renderStats)
+            .catch(function (e) {
+                document.querySelector('#yttStatsMeta').textContent = 'Stats unavailable: ' + errText(e);
+            });
+    }
+
+    function refreshVersion() {
+        return api('version').then(function (v) {
+            var yt = document.querySelector('#yttYtDlpBadge');
+            var bad = !v.YtDlp || v.YtDlp === 'not found' || v.YtDlp === 'error';
+            yt.textContent = 'yt-dlp: ' + v.YtDlp + (v.Managed ? ' (managed)' : ' (configured)');
+            yt.className = 'ytt-badge ' + (bad ? 'ytt-badge-fail' : 'ytt-badge-ok');
+
+            var ff = document.querySelector('#yttFfmpegBadge');
+            ff.textContent = 'ffmpeg: ' + (v.Ffmpeg || 'none');
+            ff.className = 'ytt-badge ' + (v.Ffmpeg && v.Ffmpeg !== '(none)' ? 'ytt-badge-ok' : 'ytt-badge-fail');
+        }).catch(function () {
+            document.querySelector('#yttYtDlpBadge').textContent = 'yt-dlp: unavailable';
+        });
+    }
+
+    // ── Active jobs ───────────────────────────────────────────────────────
+
+    function phaseBadge(phase) {
+        var map = {
+            building: ['ytt-badge-building', '▶ building'],
+            resolving: ['ytt-badge-building', '⋯ resolving'],
+            queued: ['ytt-badge-queued', '⏸ queued'],
+            completed: ['ytt-badge-ok', '✓ completed'],
+            failed: ['ytt-badge-fail', '✕ failed'],
+            canceled: ['ytt-badge-muted', '⊘ canceled']
+        };
+        var e = map[phase] || ['ytt-badge-muted', phase];
+        return '<span class="ytt-badge ' + e[0] + '">' + e[1] + '</span>';
+    }
+
+    function jobName(j) {
+        var primary = j.Label || j.Title || j.VideoId;
+        var secondary = [];
+        if (j.Label && j.Title && j.Label !== j.Title) secondary.push(j.Title);
+        secondary.push(j.VideoId);
+        if (j.Source) secondary.push('via ' + j.Source);
+        return '<div>' + esc(primary) + '</div><div class="ytt-sub ytt-mono">' + esc(secondary.join(' · ')) + '</div>';
+    }
+
+    function renderJobs(data) {
+        lastJobs = data;
+        var active = data.Active || [];
+        var list = document.querySelector('#yttJobsList');
+        var summary = document.querySelector('#yttJobsSummary');
+        var cancelAll = document.querySelector('#yttCancelAll');
+
+        var building = active.filter(function (j) { return j.Phase === 'building'; }).length;
+        var resolving = active.filter(function (j) { return j.Phase === 'resolving'; }).length;
+        var queued = active.length - building - resolving;
+
+        summary.textContent = active.length === 0 && data.PendingPrewarm === 0
+            ? 'Idle'
+            : 'Live · ' + building + ' building · ' + resolving + ' resolving · ' + queued +
+              ' waiting for a slot · ' + data.PendingPrewarm + ' in the prewarm queue';
+        cancelAll.style.display = (active.length > 0 || data.PendingPrewarm > 0) ? '' : 'none';
+
+        if (active.length === 0) {
+            list.innerHTML = '<div class="ytt-empty">' +
+                (data.PendingPrewarm > 0
+                    ? data.PendingPrewarm + ' trailer(s) queued — builds start as slots free up.'
+                    : 'No trailer builds running. This list updates live.') + '</div>';
+        } else {
+            list.innerHTML =
+                '<div class="ytt-scroll"><table class="ytt-table"><thead><tr>' +
+                '<th class="ytt-col-main">Trailer</th><th>Status</th><th>Elapsed</th>' +
+                '<th style="width:11em;">Progress</th><th>Speed</th>' +
+                '<th>Written</th><th>Actions</th>' +
+                '</tr></thead><tbody>' +
+                active.map(function (j) {
+                    var pct = (j.Percent === null || j.Percent === undefined) ? null : Math.round(j.Percent);
+                    var bar = j.Phase !== 'building'
+                        ? '<span class="ytt-sub">—</span>'
+                        : pct === null
+                            ? '<div class="ytt-progress-track indeterminate"></div>'
+                            : '<div class="ytt-progress-track"><div class="ytt-progress-fill" style="width:' + pct + '%"></div></div>' +
+                              '<div class="ytt-sub ytt-num">' + pct + '% of ' + fmtDuration(j.DurationSeconds) + '</div>';
+                    // A stream copy below ~1x means googlevideo is throttling the
+                    // read, which is the usual reason a long trailer takes a while.
+                    var speed = j.Speed ? j.Speed.toFixed(2) + 'x' : '—';
+                    return '<tr>' +
+                        '<td class="ytt-col-main">' + jobName(j) + '</td>' +
+                        '<td>' + phaseBadge(j.Phase) +
+                            (j.Playable ? '<div class="ytt-sub">playable</div>' : '') + '</td>' +
+                        '<td class="ytt-num">' + fmtElapsed(j.StartedUtc, data.ServerUtc) + '</td>' +
+                        '<td>' + bar + '</td>' +
+                        '<td class="ytt-num">' + speed + '</td>' +
+                        '<td class="ytt-num">' + (j.Bytes ? fmtBytes(j.Bytes) : '—') +
+                            (j.Segments ? '<div class="ytt-sub">' + j.Segments + ' seg</div>' : '') + '</td>' +
+                        '<td><button type="button" class="ytt-mini-action danger yttJobCancel" data-id="' + esc(j.VideoId) + '">Cancel</button></td>' +
+                        '</tr>';
+                }).join('') + '</tbody></table></div>';
+
+            list.querySelectorAll('.yttJobCancel').forEach(function (btn) {
+                btn.addEventListener('click', function () {
+                    btn.disabled = true;
+                    btn.textContent = 'Canceling…';
+                    post('jobs/cancel', { VideoIds: [btn.dataset.id] })
+                        .then(function () { toast('Build canceled', 'info'); pollJobs(); })
+                        .catch(function (e) {
+                            btn.disabled = false; btn.textContent = 'Cancel';
+                            toast('Cancel failed: ' + errText(e), 'error');
+                        });
+                });
+            });
+        }
+
+        renderRecent(data.Recent || []);
+        syncLibraryRowStates(data);
+
+        // Refresh the surrounding stats once work drains, so the cache counters
+        // and coverage bars reflect what just finished.
+        if (lastActiveCount > 0 && active.length === 0) {
+            refreshStats();
+            loadBundles();
+            loadFailures();
+        }
+        lastActiveCount = active.length;
+    }
+
+    function renderRecent(recent) {
+        var box = document.querySelector('#yttRecentList');
+        if (recent.length === 0) {
+            box.innerHTML = '<div class="ytt-empty">Nothing built yet.</div>';
+            return;
+        }
+        box.innerHTML = '<div class="ytt-scroll" style="max-height:280px;"><table class="ytt-table"><thead><tr>' +
+            '<th class="ytt-col-main">Trailer</th><th>Outcome</th><th>Took</th>' +
+            '<th>Size</th><th>When</th>' +
+            '</tr></thead><tbody>' +
+            recent.map(function (h) {
+                return '<tr>' +
+                    '<td class="ytt-col-main">' + jobName(h) +
+                        (h.Error ? '<div class="ytt-sub" style="color:rgb(255,130,120);">' + esc(h.Error) + '</div>' : '') + '</td>' +
+                    '<td>' + phaseBadge(h.Outcome) + '</td>' +
+                    '<td class="ytt-num">' + (h.ElapsedMs >= 1000 ? (h.ElapsedMs / 1000).toFixed(1) + 's' : h.ElapsedMs + 'ms') + '</td>' +
+                    '<td class="ytt-num">' + (h.Bytes ? fmtBytes(h.Bytes) : '—') + '</td>' +
+                    '<td class="ytt-num">' + fmtAgo(h.EndedUtc) + '</td>' +
+                    '</tr>';
+            }).join('') + '</tbody></table></div>';
+    }
+
+    function pollJobs() {
+        return api('jobs').then(renderJobs).catch(function () { /* transient; next tick retries */ });
+    }
+
+    function startJobPolling() {
+        // Guard on a flag, not on jobsTimer: between a tick firing and its
+        // .finally scheduling the next one, jobsTimer is null, so a second
+        // pageshow landing in that window would start a parallel chain and
+        // double the poll rate for the life of the page.
+        if (jobsPolling) return;
+        jobsPolling = true;
+        var tick = function () {
+            if (!jobsPolling) return;
+            pollJobs().finally(function () {
+                if (!jobsPolling) return;
+                // Fast while there's work to watch, slow when idle — the page can
+                // sit open all day without hammering the server.
+                var busy = lastJobs && ((lastJobs.Active || []).length > 0 || lastJobs.PendingPrewarm > 0);
+                jobsTimer = setTimeout(tick, busy ? 2000 : 15000);
+            });
+        };
+        tick();
+    }
+
+    function stopJobPolling() {
+        jobsPolling = false;
+        if (jobsTimer) { clearTimeout(jobsTimer); jobsTimer = null; }
+    }
+
+    // ── Library rows ──────────────────────────────────────────────────────
+
+    function libQuery(offset, limit) {
+        var params = [
+            'offset=' + offset,
+            'limit=' + (limit || PAGE_SIZE),
+            'cached=' + encodeURIComponent(document.querySelector('#yttCachedFilter').value),
+            'sort=' + encodeURIComponent(document.querySelector('#yttLibSort').value)
+        ];
+        var search = document.querySelector('#yttLibSearch').value.trim();
+        if (search) params.push('search=' + encodeURIComponent(search));
+        var lib = document.querySelector('#yttLibFilter').value;
+        if (lib) params.push('libraryId=' + encodeURIComponent(lib));
+        return 'library?' + params.join('&');
+    }
+
+    function loadLibrary(append) {
+        setLoading('#yttLibCard', true);
+        var offset = append ? libRows.length : 0;
+        return api(libQuery(offset))
+            .then(function (resp) {
+                libTotal = resp.Total;
+                libRows = append ? libRows.concat(resp.Items) : resp.Items;
+                if (!append) libSelection = {};
+                renderLibrary();
+            })
+            .catch(function (e) {
+                document.querySelector('#yttLibResults').innerHTML =
+                    '<div class="ytt-empty">Could not load library items: ' + esc(errText(e)) + '</div>';
+            })
+            .finally(function () { setLoading('#yttLibCard', false); });
+    }
+
+    function renderLibrary() {
+        var box = document.querySelector('#yttLibResults');
+        if (libRows.length === 0) {
+            box.innerHTML = '<div class="ytt-empty">No library items match. Items only appear here once their metadata carries a YouTube trailer link.</div>';
+        } else {
+            box.innerHTML = '<table class="ytt-table"><thead><tr>' +
+                '<th></th><th class="ytt-col-main">Item</th>' +
+                '<th>Cached</th><th>Actions</th>' +
+                '</tr></thead><tbody>' +
+                libRows.map(function (r) {
+                    var badge = r.Building
+                        ? '<span class="ytt-badge ytt-badge-building">building</span>'
+                        : r.Cached
+                            ? '<span class="ytt-badge ytt-badge-ok">cached</span>'
+                            : '<span class="ytt-badge ytt-badge-muted">not cached</span>';
+                    // Everything identifying the row lives in one cell so the
+                    // title gets the full remaining width instead of competing
+                    // with a fixed-width video-ID column.
+                    var meta = [esc(r.ItemType), esc(r.LibraryName), '<span class="ytt-mono">' + esc(r.VideoId) + '</span>'];
+                    if (r.TrailerName) meta.push(esc(r.TrailerName));
+                    // data-cached lets the live sync restore the correct idle
+                    // label ("Cache" vs "Rebuild") once a job finishes, without
+                    // needing another round trip.
+                    return '<tr data-video-id="' + esc(r.VideoId) + '" data-cached="' + (r.Cached ? '1' : '0') + '">' +
+                        '<td><input type="checkbox" class="ytt-checkbox yttLibPick" data-id="' + esc(r.VideoId) + '"' +
+                            (libSelection[r.VideoId] ? ' checked' : '') + ' /></td>' +
+                        '<td class="ytt-col-main"><div>' + esc(r.DisplayName) + '</div>' +
+                            '<div class="ytt-sub">' + meta.join(' · ') + '</div></td>' +
+                        '<td class="yttCachedCell">' + badge + '</td>' +
+                        '<td><div class="ytt-actions-cell">' +
+                            '<button type="button" class="ytt-btn ytt-btn-secondary ytt-btn-sm yttRowWarm" data-id="' + esc(r.VideoId) + '">' +
+                                (r.Cached ? 'Rebuild' : 'Cache') + '</button>' +
+                            '<button type="button" class="ytt-btn ytt-btn-secondary ytt-btn-sm yttRowDiag" data-id="' + esc(r.VideoId) + '">Diagnose</button>' +
+                        '</div></td>' +
+                        '</tr>';
+                }).join('') + '</tbody></table>';
+
+            box.querySelectorAll('.yttLibPick').forEach(function (cb) {
+                cb.addEventListener('change', function () {
+                    if (cb.checked) libSelection[cb.dataset.id] = true;
+                    else delete libSelection[cb.dataset.id];
+                    updateLibMeta();
+                });
+            });
+            box.querySelectorAll('.yttRowWarm').forEach(function (btn) {
+                btn.addEventListener('click', function () {
+                    if (btn.disabled) return;
+                    var id = btn.dataset.id;
+                    markRowBusyNow(id);
+                    return post('prewarm/videos', { VideoIds: [id] })
+                        .then(function (r) {
+                            toast(r.Changed ? 'Queued for build' : 'Already cached or queued', r.Changed ? 'success' : 'info');
+                            if (!r.Changed) { delete libBusyIds[id]; scheduleQuietLibraryRefresh(); }
+                            pollJobs();
+                        })
+                        .catch(function (e) {
+                            delete libBusyIds[id];
+                            scheduleQuietLibraryRefresh();
+                            toast('Queue failed: ' + errText(e), 'error');
+                        });
+                });
+            });
+            box.querySelectorAll('.yttRowDiag').forEach(function (btn) {
+                btn.addEventListener('click', function () {
+                    document.querySelector('#yttDiagInput').value = btn.dataset.id;
+                    runDiagnose(btn);
+                });
+            });
+        }
+        updateLibMeta();
+        updateLibFooter();
+        if (lastJobs) syncLibraryRowStates(lastJobs);
+    }
+
+    // ── Live row state ────────────────────────────────────────────────────
+    // The library table is fetched once per filter change, but jobs start and
+    // finish continuously. Without this the Cache button stays clickable on a
+    // row that is already building, and queuing it again is a no-op the user
+    // gets no feedback from. Driven by the same 2s /jobs poll that feeds the
+    // Active jobs card, so both stay in step.
+
+    var BUSY_LABEL = {
+        resolving: { text: 'Resolving…', tip: 'Looking up this trailer\u2019s stream URLs on YouTube.' },
+        queued:    { text: 'Queued',     tip: 'Waiting for a free build slot.' },
+        building:  { text: 'Building…',  tip: 'A build for this trailer is already running.' },
+        pending:   { text: 'Queued',     tip: 'Already queued — waiting to start.' }
+    };
+
+    function busyPhaseMap(data) {
+        var map = {};
+        (data.Active || []).forEach(function (j) { map[j.VideoId] = j.Phase; });
+        // Queued-but-not-started entries aren't in Active yet; without them a
+        // freshly clicked row would look idle again until the queue drains.
+        (data.PendingVideoIds || []).forEach(function (id) { if (!map[id]) map[id] = 'pending'; });
+        return map;
+    }
+
+    function syncLibraryRowStates(data) {
+        var busy = busyPhaseMap(data);
+        var justFinished = Object.keys(libBusyIds).filter(function (id) { return !busy[id]; });
+
+        document.querySelectorAll('#yttLibResults tr[data-video-id]').forEach(function (tr) {
+            var id = tr.getAttribute('data-video-id');
+            var phase = busy[id];
+            var btn = tr.querySelector('.yttRowWarm');
+            var cell = tr.querySelector('.yttCachedCell');
+            if (phase) {
+                libBusyIds[id] = true;
+                tr.classList.add('ytt-row-busy');
+                var info = BUSY_LABEL[phase] || BUSY_LABEL.pending;
+                if (btn) { btn.disabled = true; btn.title = info.tip; btn.textContent = info.text; }
+                if (cell) cell.innerHTML = phaseBadge(phase === 'pending' ? 'queued' : phase);
+            } else if (tr.classList.contains('ytt-row-busy')) {
+                tr.classList.remove('ytt-row-busy');
+                if (btn) {
+                    btn.disabled = false;
+                    btn.title = '';
+                    btn.textContent = tr.getAttribute('data-cached') === '1' ? 'Rebuild' : 'Cache';
+                }
             }
+        });
 
-            document.querySelector("#YouTubeTrailersConfigPage").addEventListener("pageshow", function () {
-                var page = this;
-                Dashboard.showLoadingMsg();
-                ApiClient.getPluginConfiguration(pluginId).then(function (config) {
-                    page.querySelector("#Enabled").checked = config.Enabled;
-                    page.querySelector("#ManageYtDlp").checked = config.ManageYtDlp;
-                    page.querySelector("#YtDlpPath").value = config.YtDlpPath || "";
-                    page.querySelector("#FfmpegPath").value = config.FfmpegPath || "";
-                    page.querySelector("#CacheDirectory").value = config.CacheDirectory || "";
-                    page.querySelector("#FormatSelector").value = config.FormatSelector || "";
-                    page.querySelector("#Proxy").value = config.Proxy || "";
-                    page.querySelector("#YtDlpArguments").value = config.YtDlpArguments || "";
-                    page.querySelector("#ResolveTimeoutSeconds").value = config.ResolveTimeoutSeconds;
-                    page.querySelector("#MaxConcurrentBuilds").value = config.MaxConcurrentBuilds;
-                    page.querySelector("#MaxAgeDays").value = config.MaxAgeDays;
-                    page.querySelector("#MaxCacheGigabytes").value = config.MaxCacheGigabytes;
-                    Dashboard.hideLoadingMsg();
+        if (justFinished.length) {
+            justFinished.forEach(function (id) { delete libBusyIds[id]; });
+            // Something completed (or failed) — re-read the rows so the cached
+            // badge and button label reflect the real outcome rather than a guess.
+            scheduleQuietLibraryRefresh();
+        }
+    }
+
+    // Optimistic marking: the poll can be up to 2s away (15s when previously
+    // idle), and a button that stays enabled after a click reads as broken.
+    function markRowBusyNow(videoId) {
+        var tr = document.querySelector('#yttLibResults tr[data-video-id="' + (window.CSS && CSS.escape ? CSS.escape(videoId) : videoId) + '"]');
+        if (!tr) return;
+        libBusyIds[videoId] = true;
+        tr.classList.add('ytt-row-busy');
+        var btn = tr.querySelector('.yttRowWarm');
+        if (btn) { btn.disabled = true; btn.title = BUSY_LABEL.pending.tip; btn.textContent = BUSY_LABEL.pending.text; }
+        var cell = tr.querySelector('.yttCachedCell');
+        if (cell) cell.innerHTML = phaseBadge('queued');
+    }
+
+    function scheduleQuietLibraryRefresh() {
+        clearTimeout(libQuietRefresh);
+        libQuietRefresh = setTimeout(function () { refreshLibraryQuietly(); }, 900);
+    }
+
+    // Re-fetch without the visible reset a normal load causes: selection and
+    // scroll position survive, and however many pages were loaded stay loaded.
+    function refreshLibraryQuietly() {
+        var box = document.querySelector('#yttLibResults');
+        var scrollTop = box ? box.scrollTop : 0;
+        var keptSelection = libSelection;
+        var wanted = Math.max(PAGE_SIZE, libRows.length);
+        return api(libQuery(0, wanted))
+            .then(function (resp) {
+                libTotal = resp.Total;
+                libRows = resp.Items;
+                libSelection = keptSelection;
+                renderLibrary();
+                var after = document.querySelector('#yttLibResults');
+                if (after) after.scrollTop = scrollTop;
+            })
+            .catch(function () { /* transient; the next poll retries */ });
+    }
+
+    function updateLibMeta() {
+        var picked = Object.keys(libSelection).length;
+        document.querySelector('#yttLibMeta').textContent =
+            'Showing ' + libRows.length + ' of ' + libTotal +
+            (picked ? ' · ' + picked + ' selected' : '');
+        var all = document.querySelector('#yttLibSelectAll');
+        all.checked = libRows.length > 0 && libRows.every(function (r) { return libSelection[r.VideoId]; });
+    }
+
+    function updateLibFooter() {
+        var footer = document.querySelector('#yttLibFooter');
+        var remaining = libTotal - libRows.length;
+        if (remaining <= 0) { footer.innerHTML = ''; return; }
+        footer.innerHTML = '<span>' + remaining + ' more not shown</span>' +
+            '<button type="button" class="ytt-mini-action" id="yttLibMore">Load ' + Math.min(remaining, PAGE_SIZE) + ' more</button>';
+        document.querySelector('#yttLibMore').addEventListener('click', function () { loadLibrary(true); });
+    }
+
+    // ── Cached bundles ────────────────────────────────────────────────────
+
+    function loadBundles(append) {
+        setLoading('#yttBundleCard', true);
+        var offset = append ? bundleRows.length : 0;
+        var params = [
+            'offset=' + offset,
+            'limit=' + PAGE_SIZE,
+            'status=' + encodeURIComponent(document.querySelector('#yttBundleStatus').value),
+            'sort=' + encodeURIComponent(document.querySelector('#yttBundleSort').value)
+        ];
+        var search = document.querySelector('#yttBundleSearch').value.trim();
+        if (search) params.push('search=' + encodeURIComponent(search));
+
+        return api('bundles?' + params.join('&'))
+            .then(function (resp) {
+                bundleTotal = resp.Total;
+                bundleRows = append ? bundleRows.concat(resp.Items) : resp.Items;
+                renderBundles();
+            })
+            .catch(function (e) {
+                document.querySelector('#yttBundleResults').innerHTML =
+                    '<div class="ytt-empty">Could not load cached trailers: ' + esc(errText(e)) + '</div>';
+            })
+            .finally(function () { setLoading('#yttBundleCard', false); });
+    }
+
+    function renderBundles() {
+        var box = document.querySelector('#yttBundleResults');
+        if (bundleRows.length === 0) {
+            box.innerHTML = '<div class="ytt-empty">Nothing cached yet.</div>';
+        } else {
+            box.innerHTML = '<table class="ytt-table"><thead><tr>' +
+                '<th class="ytt-col-main">Trailer</th><th>Status</th><th>Length</th>' +
+                '<th>Size</th><th>Built</th><th>Last used</th><th>Actions</th>' +
+                '</tr></thead><tbody>' +
+                bundleRows.map(function (b) {
+                    var title = b.ItemName || b.Title || b.VideoId;
+                    var sub = [];
+                    if (b.Title && b.ItemName && b.Title !== b.ItemName) sub.push(b.Title);
+                    sub.push(b.VideoId);
+                    if (b.LibraryName) sub.push(b.LibraryName);
+                    var badge = b.Building
+                        ? '<span class="ytt-badge ytt-badge-building">building</span>'
+                        : b.Complete
+                            ? '<span class="ytt-badge ytt-badge-ok">complete</span>'
+                            : '<span class="ytt-badge ytt-badge-warn">partial</span>';
+                    return '<tr>' +
+                        '<td class="ytt-col-main"><div>' + esc(title) + '</div><div class="ytt-sub ytt-mono">' + esc(sub.join(' · ')) + '</div></td>' +
+                        '<td>' + badge + '<div class="ytt-sub">' + b.Segments + ' seg</div></td>' +
+                        '<td class="ytt-num">' + fmtDuration(b.DurationSeconds) + '</td>' +
+                        '<td class="ytt-num">' + fmtBytes(b.Bytes) + '</td>' +
+                        '<td class="ytt-num">' + fmtAgo(b.LastWriteUtc) + '</td>' +
+                        '<td class="ytt-num">' + fmtAgo(b.LastUsedUtc) + '</td>' +
+                        '<td><div class="ytt-actions-cell">' +
+                            '<button type="button" class="ytt-btn ytt-btn-secondary ytt-btn-sm yttBundleDiag" data-id="' + esc(b.VideoId) + '">Diagnose</button>' +
+                            '<button type="button" class="ytt-btn ytt-btn-danger ytt-btn-sm yttBundleDel" data-id="' + esc(b.VideoId) + '"' +
+                                (b.Building ? ' disabled title="A build is writing into this bundle"' : '') + '>Delete</button>' +
+                        '</div></td>' +
+                        '</tr>';
+                }).join('') + '</tbody></table>';
+
+            box.querySelectorAll('.yttBundleDel').forEach(function (btn) {
+                btn.addEventListener('click', function () {
+                    withBusy(btn, function () {
+                        return post('bundles/delete', { VideoIds: [btn.dataset.id] })
+                            .then(function (r) {
+                                toast(r.Changed ? 'Deleted' : 'Could not delete (build in progress)', r.Changed ? 'success' : 'warning');
+                                loadBundles();
+                                refreshStats();
+                            })
+                            .catch(function (e) { toast('Delete failed: ' + errText(e), 'error'); });
+                    });
                 });
-                loadStats(page);
-                loadVersion(page);
             });
-
-            document.querySelector("#RefreshStats").addEventListener("click", function () {
-                loadStats(document.querySelector("#YouTubeTrailersConfigPage"));
+            box.querySelectorAll('.yttBundleDiag').forEach(function (btn) {
+                btn.addEventListener('click', function () {
+                    document.querySelector('#yttDiagInput').value = btn.dataset.id;
+                    runDiagnose(btn);
+                });
             });
+        }
 
-            document.querySelector("#UpdateYtDlp").addEventListener("click", function () {
-                var page = document.querySelector("#YouTubeTrailersConfigPage");
-                Dashboard.showLoadingMsg();
-                ApiClient.ajax({ type: "POST", url: ApiClient.getUrl("Trailers/admin/ytdlp/update"), dataType: "json" })
-                    .then(function (r) {
-                        Dashboard.hideLoadingMsg();
-                        Dashboard.alert(r.ok ? ("yt-dlp updated — version " + r.version) : ("yt-dlp update failed: " + r.message));
-                        loadVersion(page);
-                    })
-                    .catch(function () {
-                        Dashboard.hideLoadingMsg();
-                        Dashboard.alert("yt-dlp update failed.");
-                    });
-            });
+        var footer = document.querySelector('#yttBundleFooter');
+        var remaining = bundleTotal - bundleRows.length;
+        footer.innerHTML = remaining > 0
+            ? '<span>' + remaining + ' more not shown</span>' +
+              '<button type="button" class="ytt-mini-action" id="yttBundleMore">Load ' + Math.min(remaining, PAGE_SIZE) + ' more</button>'
+            : (bundleTotal > 0 ? '<span>Showing all ' + bundleTotal + '</span>' : '');
+        var more = document.querySelector('#yttBundleMore');
+        if (more) more.addEventListener('click', function () { loadBundles(true); });
+    }
 
-            document.querySelector("#ClearCache").addEventListener("click", function () {
-                var page = document.querySelector("#YouTubeTrailersConfigPage");
-                Dashboard.showLoadingMsg();
-                ApiClient.ajax({ type: "POST", url: ApiClient.getUrl("Trailers/admin/clear"), dataType: "json" })
-                    .then(function (r) {
-                        Dashboard.hideLoadingMsg();
-                        Dashboard.alert("Cleared " + r.removed + " cached trailer bundle(s).");
-                        loadStats(page);
-                    })
-                    .catch(function () {
-                        Dashboard.hideLoadingMsg();
-                        Dashboard.alert("Failed to clear cache.");
-                    });
-            });
+    // ── Diagnose ──────────────────────────────────────────────────────────
 
-            document.querySelector("#YouTubeTrailersConfigForm").addEventListener("submit", function (e) {
-                e.preventDefault();
-                var page = document.querySelector("#YouTubeTrailersConfigPage");
-                Dashboard.showLoadingMsg();
-                ApiClient.getPluginConfiguration(pluginId).then(function (config) {
-                    config.Enabled = page.querySelector("#Enabled").checked;
-                    config.ManageYtDlp = page.querySelector("#ManageYtDlp").checked;
-                    config.YtDlpPath = page.querySelector("#YtDlpPath").value;
-                    config.FfmpegPath = page.querySelector("#FfmpegPath").value;
-                    config.CacheDirectory = page.querySelector("#CacheDirectory").value;
-                    config.FormatSelector = page.querySelector("#FormatSelector").value;
-                    config.Proxy = page.querySelector("#Proxy").value;
-                    config.YtDlpArguments = page.querySelector("#YtDlpArguments").value;
-                    config.ResolveTimeoutSeconds = parseInt(page.querySelector("#ResolveTimeoutSeconds").value, 10);
-                    config.MaxConcurrentBuilds = parseInt(page.querySelector("#MaxConcurrentBuilds").value, 10);
-                    config.MaxAgeDays = parseInt(page.querySelector("#MaxAgeDays").value, 10);
-                    config.MaxCacheGigabytes = parseInt(page.querySelector("#MaxCacheGigabytes").value, 10);
-                    ApiClient.updatePluginConfiguration(pluginId, config).then(function (result) {
-                        Dashboard.processPluginConfigurationUpdateResult(result);
+    function stepIcon(status) {
+        return status === 'ok' ? '<span style="color:rgb(80,215,120);">✓</span>'
+            : status === 'warn' ? '<span style="color:rgb(255,178,56);">!</span>'
+            : '<span style="color:rgb(255,110,100);">✕</span>';
+    }
+
+    function renderDiagnose(report) {
+        var box = document.querySelector('#yttDiagReport');
+        box.innerHTML =
+            '<div class="ytt-diag-verdict ' + esc(report.Verdict) + '">' +
+                stepIcon(report.Verdict) +
+                '<strong>' + esc(report.Summary) + '</strong>' +
+                '<span class="ytt-spacer"></span>' +
+                '<span class="ytt-mono ytt-sub">' + esc(report.VideoId) + '</span>' +
+            '</div>' +
+            report.Steps.map(function (s) {
+                return '<div class="ytt-diag-step">' +
+                    '<div class="ytt-diag-icon">' + stepIcon(s.Status) + '</div>' +
+                    '<div><div class="ytt-diag-name">' + esc(s.Name) + '</div>' +
+                        '<div class="ytt-diag-detail">' + esc(s.Detail) + '</div>' +
+                        (s.Raw ? '<details class="ytt-details"><summary>Tool output</summary><pre class="ytt-pre">' + esc(s.Raw) + '</pre></details>' : '') +
+                    '</div></div>';
+            }).join('');
+        // Never let a scroll convenience take down the report: this runs inside
+        // the diagnose promise chain, so anything thrown here would be caught
+        // below and shown as "Diagnosis failed" even though the report rendered
+        // perfectly.
+        try { box.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); } catch (e) { /* not critical */ }
+    }
+
+    function runDiagnose(btn) {
+        var raw = document.querySelector('#yttDiagInput').value.trim();
+        if (!raw) { toast('Paste a YouTube URL or video ID first', 'warning'); return; }
+        var box = document.querySelector('#yttDiagReport');
+        box.innerHTML = '<div class="ytt-empty">Running the full pipeline — this can take up to a minute…</div>';
+        return withBusy(btn, function () {
+            return post('diagnose', { Video: raw })
+                .then(renderDiagnose)
+                .catch(function (e) {
+                    box.innerHTML = '<div class="ytt-empty">Diagnosis failed: ' + esc(errText(e)) + '</div>';
+                });
+        });
+    }
+
+    // ── Failures ──────────────────────────────────────────────────────────
+
+    function loadFailures() {
+        return api('failures?limit=25')
+            .then(function (resp) {
+                var box = document.querySelector('#yttFailures');
+                document.querySelector('#yttFailMeta').textContent =
+                    resp.Failures.length + ' recorded · ' + resp.Blocked.length + ' video(s) currently blocked';
+                if (resp.Failures.length === 0) {
+                    box.innerHTML = '<div class="ytt-empty">No failures recorded.</div>';
+                    return;
+                }
+                box.innerHTML = '<div class="ytt-scroll"><table class="ytt-table"><thead><tr>' +
+                    '<th class="ytt-col-main">Trailer</th><th>Stage</th><th>When</th><th>Actions</th>' +
+                    '</tr></thead><tbody>' +
+                    resp.Failures.map(function (f) {
+                        var raw = [];
+                        if (f.Command) raw.push('$ ' + f.Command);
+                        if (f.StderrTail) raw.push(f.StderrTail);
+                        return '<tr>' +
+                            '<td class="ytt-col-main"><div>' + esc(f.Label || f.VideoId) + '</div>' +
+                                '<div class="ytt-sub ytt-mono">' + esc(f.VideoId) +
+                                    (f.ExitCode !== null && f.ExitCode !== undefined ? ' · exit ' + f.ExitCode : '') + '</div>' +
+                                '<div class="ytt-diag-detail">' + esc(f.Reason) + '</div>' +
+                                (raw.length ? '<details class="ytt-details"><summary>Command &amp; tool output</summary><pre class="ytt-pre">' + esc(raw.join('\n\n')) + '</pre></details>' : '') +
+                            '</td>' +
+                            '<td>' + esc(f.Phase) + '</td>' +
+                            '<td class="ytt-num">' + fmtAgo(f.WhenUtc) + '</td>' +
+                            '<td><button type="button" class="ytt-mini-action yttFailDiag" data-id="' + esc(f.VideoId) + '">Diagnose</button></td>' +
+                            '</tr>';
+                    }).join('') + '</tbody></table></div>';
+
+                box.querySelectorAll('.yttFailDiag').forEach(function (btn) {
+                    btn.addEventListener('click', function () {
+                        document.querySelector('#yttDiagInput').value = btn.dataset.id;
+                        runDiagnose(btn);
                     });
                 });
-                return false;
+            })
+            .catch(function () { /* non-critical panel */ });
+    }
+
+    // ── Settings ──────────────────────────────────────────────────────────
+
+    var BOOL_FIELDS = ['Enabled', 'ManageYtDlp', 'PrewarmOnLibraryAdd', 'PrewarmAllTrailersPerItem',
+                       'EnableLibraryPrewarmTask', 'VerboseLogging'];
+    var TEXT_FIELDS = ['YtDlpPath', 'FfmpegPath', 'CacheDirectory', 'FormatSelector', 'Proxy', 'YtDlpArguments',
+                       'QualityPreset', 'CookiesFromBrowser', 'CookiesFile'];
+    var NUM_FIELDS  = ['ResolveTimeoutSeconds', 'MaxConcurrentBuilds', 'MaxAgeDays', 'MaxCacheGigabytes',
+                       'LibraryAddDelaySeconds', 'MaxPrewarmPerRun', 'FailureCacheMinutes',
+                       'NoSegmentTimeoutSeconds', 'CompleteWaitSeconds'];
+    var FLOAT_FIELDS = ['BuildSpeedLimit'];
+
+    function loadConfig() {
+        return ApiClient.getPluginConfiguration(pluginId).then(function (cfg) {
+            BOOL_FIELDS.forEach(function (f) {
+                var el = document.querySelector('#' + f);
+                if (el) el.checked = !!cfg[f];
             });
-        })();
-    </script>
+            TEXT_FIELDS.forEach(function (f) {
+                var el = document.querySelector('#' + f);
+                if (el) el.value = cfg[f] || '';
+            });
+            NUM_FIELDS.concat(FLOAT_FIELDS).forEach(function (f) {
+                var el = document.querySelector('#' + f);
+                if (el && cfg[f] !== undefined && cfg[f] !== null) el.value = cfg[f];
+            });
+            scopeSelection = {};
+            (cfg.PrewarmLibraryIds || []).forEach(function (id) { scopeSelection[normalizeGuid(id)] = true; });
+            renderLibraryScope();
+            syncCustomFormatRow();
+            baseline = formSnapshot();
+            markClean();
+        });
+    }
+
+    // GUIDs come back from Jellyfin dashed but may be stored either way;
+    // normalising both sides keeps the tick boxes in sync regardless.
+    function normalizeGuid(id) {
+        return String(id || '').replace(/-/g, '').toLowerCase();
+    }
+
+    function renderLibraryScope() {
+        var box = document.querySelector('#yttLibraryScope');
+        var libs = (lastStats && lastStats.Libraries) || [];
+        if (libs.length === 0) {
+            box.innerHTML = '<span class="ytt-label-help">No libraries found yet.</span>';
+            return;
+        }
+        if (lastStats && lastStats.IndexError) {
+            box.innerHTML = '<span class="ytt-label-help">Unavailable — Jellyfin could not list libraries (see Library coverage above).</span>';
+            return;
+        }
+        box.innerHTML = libs.map(function (l) {
+            var key = normalizeGuid(l.Id);
+            return '<label><input type="checkbox" class="ytt-checkbox yttScopePick" data-id="' + esc(key) + '"' +
+                (scopeSelection[key] ? ' checked' : '') + ' /><span>' + esc(l.Name) + '</span></label>';
+        }).join('');
+        box.querySelectorAll('.yttScopePick').forEach(function (cb) {
+            cb.addEventListener('change', function () {
+                if (cb.checked) scopeSelection[cb.dataset.id] = true;
+                else delete scopeSelection[cb.dataset.id];
+                onFormChanged();
+            });
+        });
+    }
+
+    // The raw selector only matters in Custom mode; hiding it otherwise keeps
+    // yt-dlp syntax out of the way of everyone who just wants "720p".
+    function syncCustomFormatRow() {
+        var preset = document.querySelector('#QualityPreset').value;
+        document.querySelector('#yttCustomFormatRow').style.display = preset === 'custom' ? '' : 'none';
+    }
+
+    // ── Unsaved-change tracking ───────────────────────────────────────────
+
+    function formSnapshot() {
+        var out = {};
+        BOOL_FIELDS.forEach(function (f) {
+            var el = document.querySelector('#' + f);
+            if (el) out[f] = el.checked;
+        });
+        TEXT_FIELDS.concat(NUM_FIELDS, FLOAT_FIELDS).forEach(function (f) {
+            var el = document.querySelector('#' + f);
+            if (el) out[f] = el.value;
+        });
+        out.__scope = Object.keys(scopeSelection).sort().join(',');
+        return JSON.stringify(out);
+    }
+
+    function markClean() {
+        dirty = false;
+        document.querySelector('#yttSaveBar').hidden = true;
+    }
+
+    function onFormChanged() {
+        dirty = formSnapshot() !== baseline;
+        document.querySelector('#yttSaveBar').hidden = !dirty;
+    }
+
+    function watchFormFields() {
+        BOOL_FIELDS.concat(TEXT_FIELDS, NUM_FIELDS, FLOAT_FIELDS).forEach(function (f) {
+            var el = document.querySelector('#' + f);
+            if (!el || el.dataset.yttWatched) return;
+            el.dataset.yttWatched = '1';
+            el.addEventListener('change', onFormChanged);
+            el.addEventListener('input', onFormChanged);
+        });
+        document.querySelector('#QualityPreset').addEventListener('change', syncCustomFormatRow);
+    }
+
+    function saveConfig(btn) {
+        return withBusy(btn, function () {
+            return ApiClient.getPluginConfiguration(pluginId).then(function (cfg) {
+                BOOL_FIELDS.forEach(function (f) {
+                    var el = document.querySelector('#' + f);
+                    if (el) cfg[f] = el.checked;
+                });
+                TEXT_FIELDS.forEach(function (f) {
+                    var el = document.querySelector('#' + f);
+                    if (el) cfg[f] = el.value.trim();
+                });
+                NUM_FIELDS.forEach(function (f) {
+                    var el = document.querySelector('#' + f);
+                    if (!el) return;
+                    var n = parseInt(el.value, 10);
+                    if (!isNaN(n)) cfg[f] = n;
+                });
+                FLOAT_FIELDS.forEach(function (f) {
+                    var el = document.querySelector('#' + f);
+                    if (!el) return;
+                    var n = parseFloat(el.value);
+                    if (!isNaN(n)) cfg[f] = n;
+                });
+                cfg.PrewarmLibraryIds = Object.keys(scopeSelection);
+                return ApiClient.updatePluginConfiguration(pluginId, cfg).then(function (result) {
+                    toast('Settings saved', 'success');
+                    Dashboard.processPluginConfigurationUpdateResult(result);
+                    baseline = formSnapshot();
+                    markClean();
+                    refreshStats();
+                    refreshVersion();
+                });
+            }).catch(function (e) { toast('Save failed: ' + errText(e), 'error'); });
+        });
+    }
+
+    // ── Wiring ────────────────────────────────────────────────────────────
+
+    function on(selector, event, handler) {
+        var el = document.querySelector(selector);
+        if (el) el.addEventListener(event, handler);
+    }
+
+    page.addEventListener('pageshow', function () {
+        applyStickyBackground();
+        watchFormFields();
+        loadConfig();
+        refreshVersion();
+        refreshStats();
+        loadLibrary(false);
+        loadBundles(false);
+        loadFailures();
+        startJobPolling();
+    });
+
+    page.addEventListener('pagehide', stopJobPolling);
+
+    on('#yttSaveBtn', 'click', function () { saveConfig(this); });
+    on('#yttSaveBarBtn', 'click', function () { saveConfig(this); });
+    on('#yttRevertBtn', 'click', function () {
+        loadConfig().then(function () { toast('Reverted to saved settings', 'info'); });
+    });
+
+    on('#yttDiagCache', 'click', function () {
+        var raw = document.querySelector('#yttDiagInput').value.trim();
+        if (!raw) { toast('Paste a YouTube URL or video ID first', 'warning'); return; }
+        var btn = this;
+        withBusy(btn, function () {
+            return post('prewarm/videos', { VideoIds: [raw] })
+                .then(function (r) {
+                    toast(r.Changed ? 'Queued for build' : 'Already cached, queued, or not a YouTube link',
+                          r.Changed ? 'success' : 'info');
+                    pollJobs();
+                })
+                .catch(function (e) { toast('Queue failed: ' + errText(e), 'error'); });
+        });
+    });
+    on('#yttRefreshStats', 'click', function () {
+        withBusy(this, function () { return refreshStats(); });
+    });
+    on('#yttRescanIndex', 'click', function () {
+        var btn = this;
+        withBusy(btn, function () {
+            return refreshStats(true).then(function () {
+                toast('Library rescanned', 'success');
+                loadLibrary(false);
+            });
+        });
+    });
+
+    on('#yttUpdateYtDlp', 'click', function () {
+        var btn = this;
+        btn.disabled = true;
+        btn.textContent = 'Updating…';
+        post('ytdlp/update')
+            .then(function (r) {
+                toast(r.Ok ? 'yt-dlp updated — ' + r.Version : 'Update failed: ' + r.Message, r.Ok ? 'success' : 'error');
+                refreshVersion();
+            })
+            .catch(function (e) { toast('Update failed: ' + errText(e), 'error'); })
+            .finally(function () { btn.disabled = false; btn.textContent = 'Update yt-dlp'; });
+    });
+
+    on('#yttCancelAll', 'click', function () {
+        var total = lastJobs ? (lastJobs.Active || []).length + lastJobs.PendingPrewarm : 0;
+        if (!confirm('Cancel all ' + total + ' pending/active trailer build(s)?\n\nRunning builds are killed and their partial output discarded. Trailers already cached are unaffected.')) return;
+        var btn = this;
+        withBusy(btn, function () {
+            return post('jobs/cancel-all')
+                .then(function (r) {
+                    toast('Canceled ' + r.Changed + ' build(s), dropped ' + r.Skipped + ' queued', 'info');
+                    pollJobs();
+                })
+                .catch(function (e) { toast('Cancel failed: ' + errText(e), 'error'); });
+        });
+    });
+
+    // Library filters
+    on('#yttLibSearch', 'input', function () {
+        clearTimeout(libSearchDebounce);
+        libSearchDebounce = setTimeout(function () { loadLibrary(false); }, 300);
+    });
+    on('#yttLibSearchBtn', 'click', function () { loadLibrary(false); });
+    ['#yttLibFilter', '#yttCachedFilter', '#yttLibSort'].forEach(function (sel) {
+        on(sel, 'change', function () { loadLibrary(false); });
+    });
+
+    on('#yttLibSelectAll', 'change', function () {
+        var checked = this.checked;
+        libRows.forEach(function (r) {
+            if (checked) libSelection[r.VideoId] = true;
+            else delete libSelection[r.VideoId];
+        });
+        renderLibrary();
+    });
+
+    on('#yttPrewarmSelected', 'click', function () {
+        var ids = Object.keys(libSelection);
+        if (ids.length === 0) { toast('Select some items first', 'warning'); return; }
+        var btn = this;
+        withBusy(btn, function () {
+            ids.forEach(markRowBusyNow);
+            return post('prewarm/videos', { VideoIds: ids })
+                .then(function (r) {
+                    toast('Queued ' + r.Changed + ' trailer(s)' + (r.Skipped ? ', skipped ' + r.Skipped : ''), 'success');
+                    pollJobs();
+                })
+                .catch(function (e) { toast('Queue failed: ' + errText(e), 'error'); });
+        });
+    });
+
+    on('#yttDeleteSelected', 'click', function () {
+        var ids = Object.keys(libSelection);
+        if (ids.length === 0) { toast('Select some items first', 'warning'); return; }
+        if (!confirm('Delete the cached trailer for ' + ids.length + ' item(s)? They rebuild on the next request.')) return;
+        var btn = this;
+        withBusy(btn, function () {
+            return post('bundles/delete', { VideoIds: ids })
+                .then(function (r) {
+                    toast('Deleted ' + r.Changed + ' bundle(s)' + (r.Skipped ? ', skipped ' + r.Skipped : ''), 'success');
+                    libSelection = {};
+                    loadLibrary(false);
+                    loadBundles(false);
+                    refreshStats();
+                })
+                .catch(function (e) { toast('Delete failed: ' + errText(e), 'error'); });
+        });
+    });
+
+    on('#yttPrewarmMatching', 'click', function () {
+        var btn = this;
+        var body = {
+            Search: document.querySelector('#yttLibSearch').value.trim() || null,
+            LibraryId: document.querySelector('#yttLibFilter').value || null,
+            Cached: document.querySelector('#yttCachedFilter').value
+        };
+        if (!confirm('Queue a trailer build for every one of the ' + libTotal + ' matching item(s)?\n\nEach is a real yt-dlp + ffmpeg job against YouTube.')) return;
+        withBusy(btn, function () {
+            return post('prewarm/matching', body)
+                .then(function (r) {
+                    toast('Queued ' + r.Changed + ' trailer(s)' + (r.Skipped ? ', skipped ' + r.Skipped + ' (already cached or queued)' : ''), 'success');
+                    pollJobs();
+                    refreshStats();
+                })
+                .catch(function (e) { toast('Queue failed: ' + errText(e), 'error'); });
+        });
+    });
+
+    // Bundle filters
+    on('#yttBundleSearch', 'input', function () {
+        clearTimeout(bundleSearchDebounce);
+        bundleSearchDebounce = setTimeout(function () { loadBundles(false); }, 300);
+    });
+    ['#yttBundleStatus', '#yttBundleSort'].forEach(function (sel) {
+        on(sel, 'change', function () { loadBundles(false); });
+    });
+    on('#yttRefreshBundles', 'click', function () {
+        withBusy(this, function () { return loadBundles(false); });
+    });
+    on('#yttClearCache', 'click', function () {
+        if (!confirm('Delete every cached trailer?\n\nBundles rebuild automatically the next time a client asks for them. Builds in progress are left alone.')) return;
+        var btn = this;
+        withBusy(btn, function () {
+            return post('clear')
+                .then(function (r) {
+                    toast('Cleared ' + r.Changed + ' cached trailer(s)', 'success');
+                    loadBundles(false);
+                    loadLibrary(false);
+                    refreshStats();
+                })
+                .catch(function (e) { toast('Clear failed: ' + errText(e), 'error'); });
+        });
+    });
+
+    // Troubleshooting
+    on('#yttDiagRun', 'click', function () { runDiagnose(this); });
+    on('#yttDiagInput', 'keydown', function (e) {
+        if (e.key === 'Enter') { e.preventDefault(); runDiagnose(document.querySelector('#yttDiagRun')); }
+    });
+    on('#yttRefreshFailures', 'click', function () {
+        withBusy(this, function () { return loadFailures(); });
+    });
+    on('#yttClearFailures', 'click', function () {
+        var btn = this;
+        withBusy(btn, function () {
+            return post('failures/clear')
+                .then(function (r) {
+                    toast('Cleared ' + r.Changed + ' failure record(s), unblocked ' + r.Skipped + ' video(s)', 'success');
+                    loadFailures();
+                    refreshStats();
+                })
+                .catch(function (e) { toast('Clear failed: ' + errText(e), 'error'); });
+        });
+    });
+})();
+</script>
 </div>
 </body>
 </html>

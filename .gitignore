@@ -17,3 +17,4 @@ artifacts/
 # Local test outputs
 *.log
 *.zip
+dist/

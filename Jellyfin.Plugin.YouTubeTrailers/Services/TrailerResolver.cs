@@ -2,14 +2,14 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Linq;
-using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using MediaBrowser.Common.Configuration;
-using MediaBrowser.Controller.MediaEncoding;
 using Microsoft.Extensions.Logging;
 
 namespace Jellyfin.Plugin.YouTubeTrailers.Services;
@@ -21,6 +21,11 @@ namespace Jellyfin.Plugin.YouTubeTrailers.Services;
 /// segment 0 the moment it exists, so time-to-first-frame is ~resolve + one
 /// segment regardless of trailer length, and googlevideo's ~1x read throttle
 /// stops mattering (AVPlayer consumes at 1x while ffmpeg stays ahead).
+///
+/// Every build is tracked as a <see cref="TrailerJob"/> from the instant it is
+/// requested — through resolve, the concurrency queue, and the remux itself —
+/// so the dashboard can show live progress and cancel work, and so a failure
+/// lands in the diagnostics log with the phase and tool output that explain it.
 /// </summary>
 public sealed class TrailerResolver
 {
@@ -29,41 +34,125 @@ public sealed class TrailerResolver
     private static readonly Regex VideoIdPattern = new("^[A-Za-z0-9_-]{11}$", RegexOptions.Compiled);
     private const string InitName = "init.mp4";
     private const string PlaylistName = "main.m3u8";
+    private const string SidecarName = "bundle.json";
+    // Zero-byte file whose mtime is the bundle's last-played time. A separate
+    // marker (rather than touching the playlist) keeps "built" and "last used"
+    // independent in both the dashboard and the pruner.
+    private const string AccessMarkerName = "accessed";
+    private static readonly TimeSpan TouchThrottle = TimeSpan.FromHours(1);
+    private const int MaxHistory = 100;
 
     private readonly ILogger<TrailerResolver> _logger;
-    private readonly IMediaEncoder _mediaEncoder;
     private readonly IApplicationPaths _appPaths;
     private readonly YtDlpManager _ytDlp;
+    private readonly ToolRunner _tools;
+    private readonly TrailerDiagnostics _diagnostics;
 
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _gates = new();
     private readonly ConcurrentDictionary<string, TrailerJob> _jobs = new();
+    private readonly ConcurrentDictionary<string, DateTime> _lastTouch = new();
+    // Short-lived record of admin cancellations. A client already blocked in
+    // WaitForPlayableAsync has no other way to learn the build went away — the
+    // job is evicted from _jobs and a cancel deliberately writes no negative-
+    // cache entry — so without this it would sit out the full resolve timeout.
+    private readonly ConcurrentDictionary<string, DateTime> _recentCancels = new();
+    private static readonly TimeSpan CancelSignalTtl = TimeSpan.FromSeconds(30);
     // Negative cache: a video that just failed to build (unavailable, geo-blocked,
     // or an unreachable CDN edge) fast-fails for a short window instead of
-    // re-running the full ~30s timeout on every request. This is what makes the
+    // re-running the full timeout on every request. This is what makes the
     // client's "try the next trailer" fallback quick on repeat/prewarmed plays.
-    private readonly ConcurrentDictionary<string, DateTime> _recentFailures = new();
-    private static readonly TimeSpan FailureTtl = TimeSpan.FromMinutes(10);
+    private readonly ConcurrentDictionary<string, FailureMark> _recentFailures = new();
+    // Bounded ring of finished builds so the dashboard can show what just
+    // happened, not only what is happening right now.
+    private readonly object _historySync = new();
+    private readonly LinkedList<JobHistoryEntry> _history = new();
     // Caps concurrent ffmpeg remuxes so prewarming a shelf can't spawn a swarm.
-    // Sized from MaxConcurrentBuilds at construction (restart to change).
-    private readonly SemaphoreSlim _startSlots;
+    // Built at the hard ceiling (MaxPossibleBuilds) and then trimmed down to the
+    // configured value, so the pool can be resized live in either direction when
+    // the admin saves — see ApplyConcurrency. Releasing beyond the constructed
+    // maxCount would throw, which is why the ceiling (not the current setting)
+    // is what the semaphore is constructed with.
+    private const int MaxPossibleBuilds = 16;
+    private readonly SemaphoreSlim _startSlots = new(MaxPossibleBuilds, MaxPossibleBuilds);
+    private readonly object _concurrencySync = new();
+    private int _grantedSlots = MaxPossibleBuilds;
 
-    public TrailerResolver(ILogger<TrailerResolver> logger, IMediaEncoder mediaEncoder, IApplicationPaths appPaths, YtDlpManager ytDlp)
+    public TrailerResolver(
+        ILogger<TrailerResolver> logger,
+        IApplicationPaths appPaths,
+        YtDlpManager ytDlp,
+        ToolRunner tools,
+        TrailerDiagnostics diagnostics)
     {
         _logger = logger;
-        _mediaEncoder = mediaEncoder;
         _appPaths = appPaths;
         _ytDlp = ytDlp;
-        var maxConcurrent = Math.Clamp(Plugin.Instance?.Configuration.MaxConcurrentBuilds ?? 4, 1, 16);
-        _startSlots = new SemaphoreSlim(maxConcurrent, maxConcurrent);
+        _tools = tools;
+        _diagnostics = diagnostics;
+        ApplyConcurrency();
+        if (Plugin.Instance is not null)
+        {
+            // Resize the build pool the moment settings are saved, so changing
+            // it doesn't require a server restart.
+            Plugin.Instance.ConfigurationChanged += (_, _) => ApplyConcurrency();
+        }
     }
 
     public static bool IsValidVideoId(string videoId) => VideoIdPattern.IsMatch(videoId);
+
+    public int MaxConcurrentBuilds =>
+        Math.Clamp(Config?.MaxConcurrentBuilds ?? 4, 1, MaxPossibleBuilds);
+
+    /// <summary>
+    /// Resizes the build-slot pool to match the configured concurrency.
+    ///
+    /// Growing is a plain <c>Release</c>. Shrinking can't revoke permits that
+    /// are already held, so it *absorbs* the difference: a background waiter
+    /// takes the surplus permits and never gives them back. In-flight builds are
+    /// therefore never interrupted — the new, lower ceiling simply takes effect
+    /// as running builds finish.
+    /// </summary>
+    private void ApplyConcurrency()
+    {
+        var target = MaxConcurrentBuilds;
+        lock (_concurrencySync)
+        {
+            var delta = target - _grantedSlots;
+            if (delta == 0)
+            {
+                return;
+            }
+            _grantedSlots = target;
+            if (delta > 0)
+            {
+                _startSlots.Release(delta);
+            }
+            else
+            {
+                var toAbsorb = -delta;
+                _ = Task.Run(async () =>
+                {
+                    for (var i = 0; i < toAbsorb; i++)
+                    {
+                        try { await _startSlots.WaitAsync().ConfigureAwait(false); }
+                        catch (ObjectDisposedException) { return; }
+                    }
+                });
+            }
+            _logger.LogInformation("[YouTubeTrailers] Build concurrency set to {Target}", target);
+        }
+    }
+
+    private static PluginConfiguration? Config => Plugin.Instance?.Configuration;
+
+    private static TimeSpan FailureTtl =>
+        TimeSpan.FromMinutes(Math.Clamp(Config?.FailureCacheMinutes ?? 10, 0, 1440));
 
     private string CacheRoot
     {
         get
         {
-            var cfg = Plugin.Instance?.Configuration;
+            var cfg = Config;
             return cfg is not null && !string.IsNullOrWhiteSpace(cfg.CacheDirectory)
                 ? cfg.CacheDirectory
                 : Path.Combine(_appPaths.CachePath, "youtube-trailers");
@@ -97,6 +186,73 @@ public sealed class TrailerResolver
             }
         }
         return (bytes, count);
+    }
+
+    /// <summary>
+    /// One row per cached bundle for the dashboard's cache browser: size,
+    /// segment count, whether the remux finished, and the YouTube title from
+    /// the sidecar so the list is readable without cross-referencing IDs.
+    /// </summary>
+    public IReadOnlyList<BundleInfo> ListBundles()
+    {
+        var root = CacheRoot;
+        var rows = new List<BundleInfo>();
+        if (!Directory.Exists(root))
+        {
+            return rows;
+        }
+        foreach (var dir in Directory.EnumerateDirectories(root))
+        {
+            var id = Path.GetFileName(dir);
+            if (!IsValidVideoId(id))
+            {
+                continue;
+            }
+            long bytes = 0;
+            var segments = 0;
+            var built = DateTime.MinValue;
+            try
+            {
+                foreach (var file in Directory.EnumerateFiles(dir, "*", SearchOption.TopDirectoryOnly))
+                {
+                    var fi = new FileInfo(file);
+                    bytes += fi.Length;
+                    // The access marker is deliberately excluded from "built":
+                    // serving a trailer touches it, and letting that bump the
+                    // build time would make every played trailer look freshly
+                    // built in the dashboard.
+                    if (fi.Name.Equals(AccessMarkerName, StringComparison.Ordinal)) continue;
+                    if (fi.LastWriteTimeUtc > built) built = fi.LastWriteTimeUtc;
+                    if (fi.Name.EndsWith(".m4s", StringComparison.Ordinal)) segments++;
+                }
+            }
+            catch (IOException) { /* racing prune */ }
+            catch (UnauthorizedAccessException) { /* unreadable */ }
+
+            var sidecar = ReadSidecar(dir);
+            rows.Add(new BundleInfo(
+                id,
+                sidecar?.Title,
+                bytes,
+                segments,
+                IsComplete(id),
+                built,
+                LastUsedUtc(dir, built),
+                sidecar?.DurationSeconds,
+                IsBuilding(id)));
+        }
+        return rows;
+    }
+
+    /// <summary>Deletes one cached bundle. Refuses while a build is writing into it.</summary>
+    public bool DeleteBundle(string videoId)
+    {
+        if (!IsValidVideoId(videoId) || IsBuilding(videoId))
+        {
+            return false;
+        }
+        var dir = BundleDir(videoId);
+        return Directory.Exists(dir) && TryDeleteDir(dir);
     }
 
     /// <summary>Deletes every cached bundle except those with an active build.</summary>
@@ -142,18 +298,23 @@ public sealed class TrailerResolver
                 continue;
             }
             long size = 0;
-            var lastWrite = DateTime.MinValue;
+            var built = DateTime.MinValue;
             foreach (var file in Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories))
             {
                 try
                 {
                     var fi = new FileInfo(file);
                     size += fi.Length;
-                    if (fi.LastWriteTimeUtc > lastWrite) lastWrite = fi.LastWriteTimeUtc;
+                    if (fi.Name.Equals(AccessMarkerName, StringComparison.Ordinal)) continue;
+                    if (fi.LastWriteTimeUtc > built) built = fi.LastWriteTimeUtc;
                 }
                 catch { /* racing */ }
             }
-            bundles.Add((dir, id, lastWrite, size));
+            // Evict on last USE, not last build. Without the access marker a
+            // trailer played every single day would still be evicted on its
+            // 30th day exactly like one nobody ever watched — which is the
+            // opposite of the "least recently used" behaviour advertised.
+            bundles.Add((dir, id, LastUsedUtc(dir, built), size));
         }
 
         var removed = 0;
@@ -191,45 +352,91 @@ public sealed class TrailerResolver
     }
 
     /// <summary>
-    /// Returns the installed yt-dlp version string (for the config page), or a
-    /// short status ("not found" / "error") so admins can spot a stale or
-    /// missing binary — the usual cause when extraction suddenly breaks.
+    /// Installed yt-dlp version for the dashboard, or a sentence explaining why
+    /// the probe failed. Never returns a bare "error": a stale binary, a
+    /// wrong-arch download and a slow first start all look identical under that
+    /// label but need completely different fixes.
     /// </summary>
     public async Task<string> YtDlpVersionAsync(CancellationToken ct)
     {
         var ytDlp = _ytDlp.Resolve();
         if (ytDlp is null)
         {
-            return "not found";
+            return "not installed";
         }
-        var psi = new ProcessStartInfo
+        var probe = await ToolRunner
+            .ProbeVersionAsync(ytDlp, ["--version"], TimeSpan.FromSeconds(30), ct)
+            .ConfigureAwait(false);
+        if (!probe.Ok)
         {
-            FileName = ytDlp,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-        };
-        psi.ArgumentList.Add("--version");
+            _logger.LogWarning("[YouTubeTrailers] yt-dlp version probe failed: {Detail}", probe.Detail);
+        }
+        return probe.Version ?? probe.Detail;
+    }
+
+    /// <summary>
+    /// Records that a bundle was just played, so age/LRU eviction reflects real
+    /// usage. Throttled to once an hour per bundle — a single playback is dozens
+    /// of segment requests and rewriting the marker for each would be pointless
+    /// disk churn.
+    /// </summary>
+    public void TouchAccess(string videoId)
+    {
+        if (!IsValidVideoId(videoId))
+        {
+            return;
+        }
+        var now = DateTime.UtcNow;
+        if (_lastTouch.TryGetValue(videoId, out var previous) && now - previous < TouchThrottle)
+        {
+            return;
+        }
+        _lastTouch[videoId] = now;
         try
         {
-            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            timeoutCts.CancelAfter(TimeSpan.FromSeconds(5));
-            var (exit, stdout, _) = await RunProcessAsync(psi, timeoutCts.Token).ConfigureAwait(false);
-            return exit == 0 && stdout.Trim().Length > 0 ? stdout.Trim() : "error";
+            var dir = BundleDir(videoId);
+            if (!Directory.Exists(dir))
+            {
+                return;
+            }
+            var marker = Path.Combine(dir, AccessMarkerName);
+            if (File.Exists(marker))
+            {
+                File.SetLastWriteTimeUtc(marker, now);
+            }
+            else
+            {
+                File.WriteAllBytes(marker, []);
+            }
         }
-        catch
+        catch (Exception ex)
         {
-            return "error";
+            _logger.LogDebug(ex, "[YouTubeTrailers] could not record access for {VideoId}", videoId);
         }
     }
 
-    private bool IsBuilding(string videoId) =>
-        _jobs.TryGetValue(videoId, out var job) && !job.RunTask.IsCompleted;
+    /// <summary>Last-played time from the access marker, falling back to build time for bundles that predate it.</summary>
+    private static DateTime LastUsedUtc(string dir, DateTime built)
+    {
+        try
+        {
+            var marker = new FileInfo(Path.Combine(dir, AccessMarkerName));
+            if (marker.Exists && marker.LastWriteTimeUtc > built)
+            {
+                return marker.LastWriteTimeUtc;
+            }
+        }
+        catch { /* unreadable — fall back */ }
+        return built;
+    }
+
+    public bool IsBuilding(string videoId) =>
+        _jobs.TryGetValue(videoId, out var job) && !job.IsFinished;
 
     private bool TryDeleteDir(string dir)
     {
         try { Directory.Delete(dir, recursive: true); return true; }
-        catch (Exception ex) { _logger.LogDebug(ex, "[YouTubeTrailers] prune delete failed for {Dir}", dir); return false; }
+        catch (Exception ex) { _logger.LogDebug(ex, "[YouTubeTrailers] delete failed for {Dir}", dir); return false; }
     }
 
     /// <summary>A bundle is fully cached once its playlist carries EXT-X-ENDLIST.</summary>
@@ -262,13 +469,162 @@ public sealed class TrailerResolver
             && File.Exists(Path.Combine(dir, "seg0.m4s"));
     }
 
+    // ---- Job inspection / control (dashboard) -----------------------------
+
+    /// <summary>Live snapshot of every build currently resolving, queued, or remuxing.</summary>
+    public IReadOnlyList<JobSnapshot> ActiveJobs() =>
+        _jobs.Values.Where(j => !j.IsFinished).Select(Snapshot)
+            .OrderBy(j => j.Phase == "building" ? 0 : j.Phase == "resolving" ? 1 : 2)
+            .ThenBy(j => j.StartedUtc)
+            .ToList();
+
+    /// <summary>Most-recently-finished builds, newest first.</summary>
+    public IReadOnlyList<JobHistoryEntry> History(int limit = 25)
+    {
+        lock (_historySync)
+        {
+            return _history.Take(Math.Clamp(limit, 1, MaxHistory)).ToList();
+        }
+    }
+
+    /// <summary>Video IDs currently fast-failing, with the moment they become retryable again.</summary>
+    public IReadOnlyList<NegativeCacheEntry> NegativeCache()
+    {
+        var ttl = FailureTtl;
+        return _recentFailures
+            .Select(kv => new NegativeCacheEntry(kv.Key, kv.Value.WhenUtc, kv.Value.WhenUtc + ttl, kv.Value.Reason))
+            .OrderByDescending(e => e.FailedUtc)
+            .ToList();
+    }
+
+    /// <summary>Drops all negative-cache entries so blocked videos are retried immediately.</summary>
+    public int ClearNegativeCache()
+    {
+        var n = _recentFailures.Count;
+        _recentFailures.Clear();
+        return n;
+    }
+
+    public bool ClearNegativeCache(string videoId) => _recentFailures.TryRemove(videoId, out _);
+
+    /// <summary>
+    /// Cancels an in-flight build: kills ffmpeg (or aborts the resolve), drops
+    /// the partial bundle, and records the job as canceled. A previously
+    /// completed bundle for the same ID is untouched — cancel only ever throws
+    /// away work that was still in progress.
+    /// </summary>
+    public bool TryCancel(string videoId)
+    {
+        if (!_jobs.TryGetValue(videoId, out var job) || job.IsFinished)
+        {
+            return false;
+        }
+        job.Canceled = true;
+        try { job.Cts.Cancel(); } catch (ObjectDisposedException) { /* already torn down */ }
+        var process = job.Process;
+        if (process is not null)
+        {
+            try { if (!process.HasExited) process.Kill(entireProcessTree: true); } catch { /* already gone */ }
+        }
+        _logger.LogInformation("[YouTubeTrailers] Canceled build for {VideoId}", videoId);
+        return true;
+    }
+
+    public int CancelAll()
+    {
+        var canceled = 0;
+        foreach (var id in _jobs.Keys.ToList())
+        {
+            if (TryCancel(id)) canceled++;
+        }
+        return canceled;
+    }
+
+    private JobSnapshot Snapshot(TrailerJob job)
+    {
+        double? percent = null;
+        if (job.DurationSeconds is > 0)
+        {
+            var seconds = Interlocked.Read(ref job.OutTimeUs) / 1_000_000d;
+            percent = Math.Clamp(seconds / job.DurationSeconds.Value * 100d, 0, 100);
+        }
+        var (segments, bytes) = MeasureBundle(job.VideoId);
+        return new JobSnapshot(
+            job.VideoId,
+            job.Label,
+            job.Title,
+            job.Source,
+            job.Phase,
+            job.StartedUtc,
+            job.DurationSeconds,
+            percent,
+            job.Speed > 0 ? job.Speed : null,
+            bytes,
+            segments,
+            IsPlayable(job.VideoId));
+    }
+
+    /// <summary>
+    /// Segment count and bytes written so far, measured on disk.
+    ///
+    /// ffmpeg's <c>-progress</c> reports <c>total_size=N/A</c> for the HLS muxer
+    /// (it tracks the primary output IO context, and HLS writes each segment to
+    /// its own file), so the bundle directory is the only honest source for
+    /// "how much has been produced". out_time and speed from -progress are still
+    /// accurate and drive the percentage.
+    /// </summary>
+    private (int Segments, long Bytes) MeasureBundle(string videoId)
+    {
+        try
+        {
+            var dir = BundleDir(videoId);
+            if (!Directory.Exists(dir))
+            {
+                return (0, 0);
+            }
+            var segments = 0;
+            long bytes = 0;
+            foreach (var file in Directory.EnumerateFiles(dir, "*", SearchOption.TopDirectoryOnly))
+            {
+                if (file.EndsWith(".m4s", StringComparison.Ordinal))
+                {
+                    segments++;
+                }
+                try { bytes += new FileInfo(file).Length; } catch { /* mid-rename */ }
+            }
+            return (segments, bytes);
+        }
+        catch
+        {
+            return (0, 0);
+        }
+    }
+
+    private void PushHistory(JobHistoryEntry entry)
+    {
+        lock (_historySync)
+        {
+            _history.AddFirst(entry);
+            while (_history.Count > MaxHistory)
+            {
+                _history.RemoveLast();
+            }
+        }
+    }
+
+    // ---- Build pipeline ---------------------------------------------------
+
     /// <summary>
     /// Ensures a remux job for the video ID is running or already complete.
     /// Returns false only when the pipeline can't even be started (bad config,
     /// resolve failure). Does NOT wait for playable output — call
     /// <see cref="WaitForPlayableAsync"/> for that.
     /// </summary>
-    public async Task<bool> StartIfNeededAsync(string videoId, CancellationToken cancellationToken)
+    public async Task<bool> StartIfNeededAsync(
+        string videoId,
+        CancellationToken cancellationToken,
+        string source = "playback",
+        string? label = null)
     {
         if (!IsValidVideoId(videoId))
         {
@@ -280,7 +636,7 @@ public sealed class TrailerResolver
             return true;
         }
 
-        var cfg = Plugin.Instance?.Configuration;
+        var cfg = Config;
         if (cfg is null || !cfg.Enabled)
         {
             return false;
@@ -289,9 +645,9 @@ public sealed class TrailerResolver
         // Negative-cache fast path: if this video failed recently, don't spend
         // another full timeout — fail immediately so the client moves on to the
         // next candidate. Stale entries fall through to a fresh attempt.
-        if (_recentFailures.TryGetValue(videoId, out var failedAt))
+        if (_recentFailures.TryGetValue(videoId, out var mark))
         {
-            if (DateTime.UtcNow - failedAt < FailureTtl)
+            if (DateTime.UtcNow - mark.WhenUtc < FailureTtl)
             {
                 return false;
             }
@@ -300,41 +656,64 @@ public sealed class TrailerResolver
 
         var gate = _gates.GetOrAdd(videoId, _ => new SemaphoreSlim(1, 1));
         await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        TrailerJob? job = null;
         try
         {
             if (IsComplete(videoId))
             {
                 return true;
             }
-            if (_jobs.TryGetValue(videoId, out var existing) && !existing.Failed && !existing.RunTask.IsCompleted)
+            if (_jobs.TryGetValue(videoId, out var existing) && !existing.IsFinished)
             {
-                return true; // already building
+                // Already building. Adopt a better label if this caller has one
+                // (a library-add knows the movie title; a raw playback request
+                // does not), so the dashboard row becomes readable.
+                existing.Label ??= label;
+                return true;
             }
+
+            job = new TrailerJob(videoId, source, label);
+            _jobs[videoId] = job;
+            _recentCancels.TryRemove(videoId, out _); // a fresh attempt supersedes any earlier cancel
 
             // Resolve URLs (fast — ~2-3s), then spawn ffmpeg without awaiting it.
-            var urls = await ResolveUrlsAsync(videoId, cfg, cancellationToken).ConfigureAwait(false);
-            if (urls is null || urls.Length == 0)
+            job.Phase = JobPhases.Resolving;
+            using var resolveCts = CancellationTokenSource
+                .CreateLinkedTokenSource(cancellationToken, job.Cts.Token);
+            var resolved = await _tools.ResolveVideoAsync(videoId, resolveCts.Token).ConfigureAwait(false);
+            if (!resolved.Ok)
             {
-                _recentFailures[videoId] = DateTime.UtcNow; // unavailable/geo-blocked → fast-fail next time
-                _logger.LogWarning("[YouTubeTrailers] yt-dlp returned no URLs for {VideoId}", videoId);
+                var reason = resolved.TimedOut
+                    ? "yt-dlp timed out (30s) — this server can't reach YouTube, or a configured proxy is unreachable."
+                    : resolved.Urls.Length == 0
+                        ? "yt-dlp resolved no stream URLs (video unavailable/geo-blocked, or no format matched the selector)."
+                        : $"yt-dlp returned {resolved.Urls.Length} URLs; expected 1 or 2.";
+                FailJob(job, JobPhases.Resolving, reason, resolved.Exit,
+                    ToolRunner.TailLines(resolved.Stderr), resolved.Command);
                 return false;
             }
 
-            var job = await StartRemuxAsync(videoId, urls, cfg, cancellationToken).ConfigureAwait(false);
-            if (job is null)
-            {
-                return false;
-            }
-            _jobs[videoId] = job;
-            return true;
+            job.Title = resolved.Title;
+            job.DurationSeconds = resolved.DurationSeconds;
+
+            var started = await StartRemuxAsync(job, resolved, cfg, cancellationToken).ConfigureAwait(false);
+            return started;
         }
         catch (OperationCanceledException)
         {
+            if (job is not null)
+            {
+                CancelJob(job, "Request canceled before the build started.");
+            }
             return false;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "[YouTubeTrailers] StartIfNeeded failed for {VideoId}", videoId);
+            if (job is not null)
+            {
+                FailJob(job, job.Phase, ex.Message, null, string.Empty, string.Empty);
+            }
             return false;
         }
         finally
@@ -346,8 +725,7 @@ public sealed class TrailerResolver
     /// <summary>Waits until the bundle is playable (init+seg0+playlist) or the job dies.</summary>
     public async Task<bool> WaitForPlayableAsync(string videoId, CancellationToken cancellationToken)
     {
-        var cfg = Plugin.Instance?.Configuration;
-        var timeoutMs = Math.Clamp(cfg?.ResolveTimeoutSeconds ?? 60, 10, 300) * 1000;
+        var timeoutMs = Math.Clamp(Config?.ResolveTimeoutSeconds ?? 60, 10, 300) * 1000;
         var sw = Stopwatch.StartNew();
         while (sw.ElapsedMilliseconds < timeoutMs)
         {
@@ -365,29 +743,25 @@ public sealed class TrailerResolver
             // build (or the watchdog kill) already failed. The negative-cache
             // entry is written at the same instant and survives eviction, so treat
             // it as the authoritative "this build failed" signal. (This is what
-            // makes the watchdog's 20s kill actually reach the client.)
+            // makes the watchdog's kill actually reach the client.)
             if (_recentFailures.ContainsKey(videoId))
             {
                 return false;
+            }
+            // An admin cancelling a build must reach the client immediately
+            // rather than leaving it to time out.
+            if (_recentCancels.TryGetValue(videoId, out var canceledAt))
+            {
+                if (DateTime.UtcNow - canceledAt < CancelSignalTtl)
+                {
+                    return false;
+                }
+                _recentCancels.TryRemove(videoId, out _);
             }
             await Task.Delay(150, cancellationToken).ConfigureAwait(false);
         }
         return IsPlayable(videoId);
     }
-
-    // Full-screen (?complete=1) grace: serve the finite VOD playlist if the remux
-    // is already done (warm/prewarmed → real scrubber, zero wait), otherwise start
-    // live almost immediately. Kept tiny so it never adds meaningful startup
-    // latency — a cold/throttled trailer just plays live now and shows the scrubber
-    // on replay once warm, instead of stalling here.
-    private const int CompleteWaitCapMs = 3_000;
-
-    // If no first segment appears within this window, the build is killed and
-    // negative-cached. A dead CDN edge makes ffmpeg's -reconnect retry forever,
-    // producing no segment and never exiting on its own — so the playable-wait
-    // would otherwise burn the full ResolveTimeoutSeconds (~60s). Killing early
-    // lets the client's fallback chain reach the next trailer fast.
-    private const int NoProgressKillMs = 20_000;
 
     /// <summary>
     /// Waits (bounded) until the bundle is fully remuxed (ENDLIST) or the job
@@ -398,8 +772,13 @@ public sealed class TrailerResolver
     /// </summary>
     public async Task<bool> WaitForCompleteAsync(string videoId, CancellationToken cancellationToken)
     {
+        // Full-screen (?complete=1) grace: serve the finite VOD playlist if the
+        // remux is already done (warm/prewarmed → real scrubber, zero wait),
+        // otherwise start live almost immediately. Kept tiny so it never adds
+        // meaningful startup latency.
+        var capMs = Math.Clamp(Config?.CompleteWaitSeconds ?? 3, 0, 60) * 1000;
         var sw = Stopwatch.StartNew();
-        while (sw.ElapsedMilliseconds < CompleteWaitCapMs)
+        while (sw.ElapsedMilliseconds < capMs)
         {
             if (IsComplete(videoId))
             {
@@ -445,7 +824,7 @@ public sealed class TrailerResolver
                 return true;
             }
             // If the job is gone/complete and the file still isn't here, it never will be.
-            var jobActive = _jobs.TryGetValue(videoId, out var job) && !job.Failed && !job.RunTask.IsCompleted;
+            var jobActive = _jobs.TryGetValue(videoId, out var job) && !job.Failed && !job.IsFinished;
             if (!jobActive)
             {
                 return File.Exists(path);
@@ -456,101 +835,31 @@ public sealed class TrailerResolver
     }
 
     /// <summary>
-    /// Splits a configured argument string into individual args, honoring simple
-    /// double-quotes so values with spaces (e.g. a cookies path) stay intact.
-    /// </summary>
-    private static IEnumerable<string> SplitArgs(string? args)
-    {
-        if (string.IsNullOrWhiteSpace(args))
-        {
-            yield break;
-        }
-        var sb = new StringBuilder();
-        var inQuotes = false;
-        foreach (var c in args)
-        {
-            if (c == '"')
-            {
-                inQuotes = !inQuotes;
-            }
-            else if (char.IsWhiteSpace(c) && !inQuotes)
-            {
-                if (sb.Length > 0) { yield return sb.ToString(); sb.Clear(); }
-            }
-            else
-            {
-                sb.Append(c);
-            }
-        }
-        if (sb.Length > 0) { yield return sb.ToString(); }
-    }
-
-    private async Task<string[]?> ResolveUrlsAsync(string videoId, PluginConfiguration cfg, CancellationToken ct)
-    {
-        var ytDlp = _ytDlp.Resolve();
-        if (ytDlp is null)
-        {
-            _logger.LogError("[YouTubeTrailers] no usable yt-dlp (configured path missing and managed binary not installed)");
-            return null;
-        }
-
-        var psi = new ProcessStartInfo
-        {
-            FileName = ytDlp,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-        };
-        psi.ArgumentList.Add("-f");
-        psi.ArgumentList.Add(cfg.FormatSelector);
-        psi.ArgumentList.Add("--get-url");
-        psi.ArgumentList.Add("--no-warnings");
-        psi.ArgumentList.Add("--no-playlist");
-        if (!string.IsNullOrWhiteSpace(cfg.Proxy))
-        {
-            psi.ArgumentList.Add("--proxy");
-            psi.ArgumentList.Add(cfg.Proxy);
-        }
-        // Admin-configured extra args (cookies, extractor-args, rate limit…).
-        foreach (var arg in SplitArgs(cfg.YtDlpArguments))
-        {
-            psi.ArgumentList.Add(arg);
-        }
-        psi.ArgumentList.Add($"https://www.youtube.com/watch?v={videoId}");
-
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeoutCts.CancelAfter(TimeSpan.FromSeconds(30));
-        var (exit, stdout, stderr) = await RunProcessAsync(psi, timeoutCts.Token).ConfigureAwait(false);
-        if (exit != 0)
-        {
-            _logger.LogWarning("[YouTubeTrailers] yt-dlp exit {Exit} for {VideoId}: {Err}", exit, videoId, stderr.Trim());
-            return null;
-        }
-
-        var urls = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        return urls.Length is 1 or 2 ? urls : null;
-    }
-
-    /// <summary>
     /// Spawns ffmpeg writing a live event-playlist HLS bundle into the video's
-    /// dir and returns immediately with a job whose RunTask completes when
-    /// ffmpeg exits. The bundle is built in place; IsComplete (ENDLIST) is the
-    /// authoritative "fully cached" signal.
+    /// dir and returns as soon as the process is running; the job's RunTask
+    /// completes when ffmpeg exits. The bundle is built in place; IsComplete
+    /// (ENDLIST) is the authoritative "fully cached" signal.
     /// </summary>
-    private async Task<TrailerJob?> StartRemuxAsync(string videoId, string[] urls, PluginConfiguration cfg, CancellationToken ct)
+    private async Task<bool> StartRemuxAsync(
+        TrailerJob job, ToolRunner.ResolvedVideo resolved, PluginConfiguration cfg, CancellationToken ct)
     {
-        var ffmpeg = ResolveFfmpegPath(cfg);
+        var videoId = job.VideoId;
+        var urls = resolved.Urls;
+
+        var ffmpeg = _tools.ResolveFfmpeg();
         if (ffmpeg is null)
         {
-            _logger.LogError("[YouTubeTrailers] no usable ffmpeg (configured='{Cfg}', encoder='{Enc}')",
-                cfg.FfmpegPath, _mediaEncoder.EncoderPath);
-            return null;
+            FailJob(job, JobPhases.Building,
+                $"No usable ffmpeg (configured='{cfg.FfmpegPath}', Jellyfin encoder='{_tools.EncoderPath}').",
+                null, string.Empty, string.Empty);
+            return false;
         }
 
         var dir = BundleDir(videoId);
         // Wipe any stale/partial bundle from a previous crashed run, start clean.
         try { if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true); } catch { /* ignore */ }
         Directory.CreateDirectory(dir);
+        WriteSidecar(dir, new BundleSidecar(videoId, job.Title, job.DurationSeconds, DateTime.UtcNow, job.Label, job.Source));
 
         var psi = new ProcessStartInfo
         {
@@ -562,6 +871,12 @@ public sealed class TrailerResolver
         };
         psi.ArgumentList.Add("-loglevel");
         psi.ArgumentList.Add("error");
+        // Machine-readable progress on stdout (out_time_us / total_size / speed)
+        // is what drives the dashboard's live percentage. -nostats suppresses the
+        // human stats line so stderr stays pure error output for the failure log.
+        psi.ArgumentList.Add("-nostats");
+        psi.ArgumentList.Add("-progress");
+        psi.ArgumentList.Add("pipe:1");
         psi.ArgumentList.Add("-y");
         foreach (var url in urls)
         {
@@ -578,6 +893,16 @@ public sealed class TrailerResolver
             psi.ArgumentList.Add("1");
             psi.ArgumentList.Add("-reconnect_delay_max");
             psi.ArgumentList.Add("5");
+            // Optional bandwidth cap, expressed as a multiple of realtime. This
+            // belongs on ffmpeg, not yt-dlp: ffmpeg performs the actual download
+            // (yt-dlp only resolves the URL), so yt-dlp's --limit-rate would have
+            // no effect at all. Refuse anything below 1x — the build would then
+            // fall behind playback and the no-segment watchdog would kill it.
+            if (cfg.BuildSpeedLimit >= 1)
+            {
+                psi.ArgumentList.Add("-readrate");
+                psi.ArgumentList.Add(cfg.BuildSpeedLimit.ToString("0.##", CultureInfo.InvariantCulture));
+            }
             // Proxy the ACTUAL fetch too (not just yt-dlp's resolution) — without
             // this, geo-blocked content resolves through the proxy but ffmpeg
             // still fetches direct and gets blocked.
@@ -633,82 +958,107 @@ public sealed class TrailerResolver
             psi.Environment["HTTPS_PROXY"] = cfg.Proxy;
         }
 
+        var command = ToolRunner.Describe(psi);
+        job.Command = command;
+        if (cfg.VerboseLogging)
+        {
+            _logger.LogInformation("[YouTubeTrailers] remux command for {VideoId}: {Command}", videoId, command);
+        }
+
         // Bound concurrent ffmpeg jobs. Acquired here, released when ffmpeg exits.
         // Cancellable so a request abandoned while queued for a slot (and holding
         // the per-video gate) doesn't pin it for the slot-holder's full build.
-        await _startSlots.WaitAsync(ct).ConfigureAwait(false);
+        job.Phase = JobPhases.Queued;
+        using (var slotCts = CancellationTokenSource.CreateLinkedTokenSource(ct, job.Cts.Token))
+        {
+            try
+            {
+                await _startSlots.WaitAsync(slotCts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                CancelJob(job, "Canceled while queued for a build slot.");
+                return false;
+            }
+        }
+        job.Phase = JobPhases.Building;
+        job.BuildStartedUtc = DateTime.UtcNow;
 
         var process = new Process { StartInfo = psi, EnableRaisingEvents = true };
-        var stderr = new StringBuilder();
+        var stderr = new System.Text.StringBuilder();
         process.ErrorDataReceived += (_, e) => { if (e.Data is not null) stderr.AppendLine(e.Data); };
-
-        var startedUtc = DateTime.UtcNow;
-        var job = new TrailerJob(process, startedUtc);
+        // -progress emits repeating key=value blocks; we only care about three
+        // keys. Reading this stream is also mandatory now that stdout carries
+        // data — an unread pipe would eventually block ffmpeg.
+        process.OutputDataReceived += (_, e) => ApplyProgressLine(job, e.Data);
+        job.Process = process;
 
         try
         {
             process.Start();
             process.BeginErrorReadLine();
+            process.BeginOutputReadLine();
         }
         catch (Exception ex)
         {
             _startSlots.Release();
-            _logger.LogError(ex, "[YouTubeTrailers] failed to start ffmpeg for {VideoId}", videoId);
-            return null;
+            FailJob(job, JobPhases.Building, $"Failed to start ffmpeg: {ex.Message}", null, string.Empty, command);
+            return false;
         }
 
-        // No-progress watchdog: if seg0 hasn't appeared within NoProgressKillMs,
-        // kill the stalled build (a dead CDN edge that ffmpeg keeps reconnecting
-        // to). Killing makes the process exit → the monitor below marks it Failed
-        // and negative-caches it, so the client moves to the next trailer fast
-        // instead of waiting out the full playable timeout. No-op once seg0 lands.
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                await Task.Delay(NoProgressKillMs).ConfigureAwait(false);
-                if (!IsPlayable(videoId) && !process.HasExited)
-                {
-                    _logger.LogWarning(
-                        "[YouTubeTrailers] No segment within {Ms}ms for {VideoId} — killing stalled build",
-                        NoProgressKillMs, videoId);
-                    try { process.Kill(entireProcessTree: true); } catch { /* already gone */ }
-                }
-            }
-            catch { /* ignore */ }
-        });
+        StartNoProgressWatchdog(job, process);
 
-        // Monitor exit asynchronously — sets Failed and releases the slot.
+        // Monitor exit asynchronously — records the outcome and releases the slot.
         job.RunTask = Task.Run(async () =>
         {
             try
             {
                 await process.WaitForExitAsync().ConfigureAwait(false);
-                if (process.ExitCode != 0 || !IsComplete(videoId))
+                var elapsedMs = (long)(DateTime.UtcNow - job.StartedUtc).TotalMilliseconds;
+
+                if (job.Canceled)
                 {
-                    job.Failed = true;
-                    _recentFailures[videoId] = DateTime.UtcNow; // negative-cache for fast fallback
-                    _logger.LogWarning("[YouTubeTrailers] ffmpeg exit {Exit} for {VideoId}: {Err}",
-                        process.ExitCode, videoId, stderr.ToString().Trim());
+                    // A canceled build leaves a half-written bundle that would
+                    // otherwise look like a legitimate partial cache entry.
+                    TryDeleteDir(BundleDir(videoId));
+                    CancelJob(job, job.Error ?? "Canceled by an administrator.");
+                }
+                else if (process.ExitCode != 0 || !IsComplete(videoId))
+                {
+                    var tail = ToolRunner.TailLines(stderr.ToString());
+                    var reason = job.WatchdogKilled
+                        ? $"No first segment within {NoSegmentTimeoutSeconds}s — build killed. The CDN edge accepted the "
+                          + "connection but never delivered data; ffmpeg's reconnect would retry forever."
+                        : process.ExitCode != 0
+                            ? $"ffmpeg exited {process.ExitCode} after {elapsedMs} ms."
+                            : "ffmpeg exited 0 but the playlist has no EXT-X-ENDLIST — the remux stopped early.";
+                    FailJob(job, JobPhases.Building, reason, process.ExitCode, tail, command);
                 }
                 else
                 {
                     _recentFailures.TryRemove(videoId, out _); // recovered — clear any prior failure
+                    job.Phase = JobPhases.Completed;
+                    job.EndedUtc = DateTime.UtcNow;
+                    var final = MeasureBundle(videoId);
+                    PushHistory(new JobHistoryEntry(
+                        videoId, job.Label, job.Title, job.Source, "completed",
+                        job.StartedUtc, job.EndedUtc.Value, elapsedMs,
+                        final.Bytes, final.Segments, null, null, null));
                     _logger.LogInformation(
                         "[YouTubeTrailers] Completed bundle for {VideoId} in {Ms}ms ({Mode})",
-                        videoId, (long)(DateTime.UtcNow - startedUtc).TotalMilliseconds,
-                        urls.Length == 2 ? "adaptive" : "muxed");
+                        videoId, elapsedMs, urls.Length == 2 ? "adaptive" : "muxed");
                 }
             }
             catch (Exception ex)
             {
-                job.Failed = true;
-                _logger.LogError(ex, "[YouTubeTrailers] ffmpeg monitor failed for {VideoId}", videoId);
+                FailJob(job, JobPhases.Building, $"Build monitor failed: {ex.Message}", null, string.Empty, command);
             }
             finally
             {
                 _startSlots.Release();
                 try { process.Dispose(); } catch { /* ignore */ }
+                job.Process = null;
+                try { job.Cts.Dispose(); } catch { /* ignore */ }
                 // Evict ourselves so _jobs only ever holds in-flight builds.
                 // KeyValuePair overload removes only if THIS job is still mapped
                 // (a newer rebuild for the same id is left intact). Removing a
@@ -717,66 +1067,154 @@ public sealed class TrailerResolver
             }
         });
 
-        _logger.LogInformation("[YouTubeTrailers] Started remux for {VideoId} ({Mode})",
-            videoId, urls.Length == 2 ? "adaptive" : "muxed");
-        return job;
+        _logger.LogInformation("[YouTubeTrailers] Started remux for {VideoId} ({Mode}) — {Label}",
+            videoId, urls.Length == 2 ? "adaptive" : "muxed", job.Label ?? job.Title ?? "unlabelled");
+        return true;
     }
 
     /// <summary>
-    /// Resolves a usable ffmpeg. Jellyfin's EncoderPath is often the bare name
-    /// "ffmpeg" (resolved via PATH at launch), which File.Exists can't validate
-    /// — so prefer absolute candidates that exist, falling back to a bare name
-    /// (Process resolves it via PATH) only as a last resort.
+    /// If no first segment appears within the configured window, the build is
+    /// killed and negative-cached. A dead CDN edge makes ffmpeg's -reconnect
+    /// retry forever, producing no segment and never exiting on its own — so the
+    /// playable-wait would otherwise burn the full ResolveTimeoutSeconds.
+    /// Killing early lets the client's fallback chain reach the next trailer fast.
     /// </summary>
-    private string? ResolveFfmpegPath(PluginConfiguration cfg)
+    private static int NoSegmentTimeoutSeconds =>
+        Math.Clamp(Config?.NoSegmentTimeoutSeconds ?? 20, 5, 120);
+
+    private void StartNoProgressWatchdog(TrailerJob job, Process process)
     {
-        string?[] candidates =
+        _ = Task.Run(async () =>
         {
-            string.IsNullOrWhiteSpace(cfg.FfmpegPath) ? null : cfg.FfmpegPath,
-            _mediaEncoder.EncoderPath,
-            "/opt/homebrew/bin/ffmpeg",
-            "/usr/local/bin/ffmpeg",
-            "/usr/bin/ffmpeg",
-        };
-        foreach (var c in candidates)
-        {
-            if (!string.IsNullOrWhiteSpace(c) && c.Contains('/') && File.Exists(c))
+            try
             {
-                return c;
+                await Task.Delay(TimeSpan.FromSeconds(NoSegmentTimeoutSeconds)).ConfigureAwait(false);
+                if (!IsPlayable(job.VideoId) && !process.HasExited && !job.Canceled)
+                {
+                    job.WatchdogKilled = true;
+                    _logger.LogWarning(
+                        "[YouTubeTrailers] No segment within {Sec}s for {VideoId} — killing stalled build",
+                        NoSegmentTimeoutSeconds, job.VideoId);
+                    try { process.Kill(entireProcessTree: true); } catch { /* already gone */ }
+                }
             }
-        }
-        foreach (var c in candidates)
-        {
-            if (!string.IsNullOrWhiteSpace(c))
-            {
-                return c;
-            }
-        }
-        return null;
+            catch { /* ignore */ }
+        });
     }
 
-    private static async Task<(int Exit, string Stdout, string Stderr)> RunProcessAsync(
-        ProcessStartInfo psi, CancellationToken ct)
+    /// <summary>
+    /// Consumes one line of ffmpeg's <c>-progress</c> stream. Only three keys
+    /// matter: how far into the source we are, how much we've written, and how
+    /// fast relative to realtime (a speed well under 1x on a stream copy means
+    /// the CDN is throttling, which is exactly what an admin wants to see).
+    /// </summary>
+    private static void ApplyProgressLine(TrailerJob job, string? line)
     {
-        using var process = new Process { StartInfo = psi, EnableRaisingEvents = true };
-        var stdout = new StringBuilder();
-        var stderr = new StringBuilder();
-        process.OutputDataReceived += (_, e) => { if (e.Data is not null) stdout.AppendLine(e.Data); };
-        process.ErrorDataReceived += (_, e) => { if (e.Data is not null) stderr.AppendLine(e.Data); };
+        if (string.IsNullOrEmpty(line))
+        {
+            return;
+        }
+        var eq = line.IndexOf('=', StringComparison.Ordinal);
+        if (eq <= 0)
+        {
+            return;
+        }
+        var key = line[..eq].Trim();
+        var value = line[(eq + 1)..].Trim();
+        switch (key)
+        {
+            // out_time_us and out_time_ms are BOTH microseconds in ffmpeg's
+            // progress output (a long-standing naming bug); either is fine.
+            case "out_time_us":
+            case "out_time_ms":
+                if (long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var us) && us >= 0)
+                {
+                    Interlocked.Exchange(ref job.OutTimeUs, us);
+                }
+                break;
+            case "total_size":
+                if (long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var size) && size >= 0)
+                {
+                    Interlocked.Exchange(ref job.TotalBytes, size);
+                }
+                break;
+            case "speed":
+                var trimmed = value.TrimEnd('x');
+                if (double.TryParse(trimmed, NumberStyles.Float, CultureInfo.InvariantCulture, out var speed))
+                {
+                    job.Speed = speed;
+                }
+                break;
+        }
+    }
 
-        process.Start();
-        process.BeginOutputReadLine();
-        process.BeginErrorReadLine();
+    // ---- Terminal-state helpers ------------------------------------------
+
+    private void FailJob(TrailerJob job, string phase, string reason, int? exitCode, string stderrTail, string command)
+    {
+        job.Failed = true;
+        job.Phase = JobPhases.Failed;
+        job.Error = reason;
+        job.EndedUtc = DateTime.UtcNow;
+        var elapsedMs = (long)(job.EndedUtc.Value - job.StartedUtc).TotalMilliseconds;
+
+        _recentFailures[job.VideoId] = new FailureMark(DateTime.UtcNow, reason);
+        _diagnostics.RecordFailure(new TrailerFailure(
+            job.VideoId, job.Label, phase, job.EndedUtc.Value, exitCode, reason, stderrTail, command, elapsedMs));
+        var measured = MeasureBundle(job.VideoId);
+        PushHistory(new JobHistoryEntry(
+            job.VideoId, job.Label, job.Title, job.Source, "failed",
+            job.StartedUtc, job.EndedUtc.Value, elapsedMs,
+            measured.Bytes, measured.Segments, reason, stderrTail, command));
+
+        // Jobs that die before ffmpeg starts never reach the exit monitor, so
+        // evict here too; the monitor's own removal is a no-op in that case.
+        _jobs.TryRemove(new KeyValuePair<string, TrailerJob>(job.VideoId, job));
+    }
+
+    private void CancelJob(TrailerJob job, string reason)
+    {
+        _recentCancels[job.VideoId] = DateTime.UtcNow;
+        job.Canceled = true;
+        job.Phase = JobPhases.Canceled;
+        job.Error = reason;
+        job.EndedUtc ??= DateTime.UtcNow;
+        var elapsedMs = (long)(job.EndedUtc.Value - job.StartedUtc).TotalMilliseconds;
+        var measured = MeasureBundle(job.VideoId);
+        PushHistory(new JobHistoryEntry(
+            job.VideoId, job.Label, job.Title, job.Source, "canceled",
+            job.StartedUtc, job.EndedUtc.Value, elapsedMs,
+            measured.Bytes, measured.Segments, reason, null, null));
+        // A cancel is an explicit admin decision, not evidence the video is bad
+        // — deliberately no negative-cache entry, so the next request retries.
+        _jobs.TryRemove(new KeyValuePair<string, TrailerJob>(job.VideoId, job));
+    }
+
+    // ---- Bundle sidecar ---------------------------------------------------
+
+    private void WriteSidecar(string dir, BundleSidecar sidecar)
+    {
         try
         {
-            await process.WaitForExitAsync(ct).ConfigureAwait(false);
+            File.WriteAllText(Path.Combine(dir, SidecarName), JsonSerializer.Serialize(sidecar));
         }
-        catch (OperationCanceledException)
+        catch (Exception ex)
         {
-            try { if (!process.HasExited) process.Kill(entireProcessTree: true); } catch { /* best effort */ }
-            throw;
+            _logger.LogDebug(ex, "[YouTubeTrailers] could not write bundle sidecar in {Dir}", dir);
         }
-        return (process.ExitCode, stdout.ToString(), stderr.ToString());
+    }
+
+    private static BundleSidecar? ReadSidecar(string dir)
+    {
+        try
+        {
+            var path = Path.Combine(dir, SidecarName);
+            return File.Exists(path) ? JsonSerializer.Deserialize<BundleSidecar>(File.ReadAllText(path)) : null;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     /// <summary>Rewrites init/segment URIs in a served playlist to carry the caller's auth token.</summary>
@@ -791,18 +1229,109 @@ public sealed class TrailerResolver
         return playlist;
     }
 
+    private readonly record struct FailureMark(DateTime WhenUtc, string Reason);
+
+    /// <summary>Phase constants — also the strings the dashboard renders as badges.</summary>
+    public static class JobPhases
+    {
+        public const string Resolving = "resolving";
+        public const string Queued = "queued";
+        public const string Building = "building";
+        public const string Completed = "completed";
+        public const string Failed = "failed";
+        public const string Canceled = "canceled";
+    }
+
+    /// <summary>Mutable live state for one in-flight build.</summary>
     public sealed class TrailerJob
     {
-        public TrailerJob(Process process, DateTime startedUtc)
+        public TrailerJob(string videoId, string source, string? label)
         {
-            Process = process;
-            StartedUtc = startedUtc;
+            VideoId = videoId;
+            Source = source;
+            Label = label;
+            StartedUtc = DateTime.UtcNow;
             RunTask = Task.CompletedTask;
+            Cts = new CancellationTokenSource();
         }
 
-        public Process Process { get; }
+        public string VideoId { get; }
+        public string Source { get; }
         public DateTime StartedUtc { get; }
+        public CancellationTokenSource Cts { get; }
+
+        public string? Label { get; set; }
+        public string? Title { get; set; }
+        public double? DurationSeconds { get; set; }
+        public string? Command { get; set; }
+        public string? Error { get; set; }
+        public DateTime? BuildStartedUtc { get; set; }
+        public DateTime? EndedUtc { get; set; }
+        public Process? Process { get; set; }
         public Task RunTask { get; set; }
+
+        public volatile string Phase = JobPhases.Resolving;
         public volatile bool Failed;
+        public volatile bool Canceled;
+        public volatile bool WatchdogKilled;
+
+        // Written by the progress reader thread, read by the dashboard poll —
+        // Interlocked because long isn't atomic on 32-bit runtimes.
+        public long OutTimeUs;
+        public long TotalBytes;
+        public double Speed;
+
+        public bool IsFinished =>
+            Phase is JobPhases.Completed or JobPhases.Failed or JobPhases.Canceled;
     }
 }
+
+/// <summary>Serializable view of a live build for the dashboard.</summary>
+public sealed record JobSnapshot(
+    string VideoId,
+    string? Label,
+    string? Title,
+    string Source,
+    string Phase,
+    DateTime StartedUtc,
+    double? DurationSeconds,
+    double? Percent,
+    double? Speed,
+    long Bytes,
+    int Segments,
+    bool Playable);
+
+/// <summary>A finished build, kept in a bounded ring for the "recent activity" list.</summary>
+public sealed record JobHistoryEntry(
+    string VideoId,
+    string? Label,
+    string? Title,
+    string Source,
+    string Outcome,
+    DateTime StartedUtc,
+    DateTime EndedUtc,
+    long ElapsedMs,
+    long Bytes,
+    int Segments,
+    string? Error,
+    string? StderrTail,
+    string? Command);
+
+/// <summary>One cached bundle on disk.</summary>
+public sealed record BundleInfo(
+    string VideoId,
+    string? Title,
+    long Bytes,
+    int Segments,
+    bool Complete,
+    DateTime LastWriteUtc,
+    DateTime LastUsedUtc,
+    double? DurationSeconds,
+    bool Building);
+
+/// <summary>A video that is fast-failing until its negative-cache entry expires.</summary>
+public sealed record NegativeCacheEntry(string VideoId, DateTime FailedUtc, DateTime RetryAfterUtc, string Reason);
+
+/// <summary>On-disk metadata written next to a bundle so titles survive a restart.</summary>
+public sealed record BundleSidecar(
+    string VideoId, string? Title, double? DurationSeconds, DateTime BuiltUtc, string? Label, string? Source);

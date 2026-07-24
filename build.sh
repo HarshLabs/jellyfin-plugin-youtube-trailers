@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Local dev build + hot-deploy.
+#
+# The plugin ships for two Jellyfin ABIs (see abi.env). This script figures out
+# which one the locally installed server needs and deploys that build, so you
+# don't have to think about it. Override with:  ./build.sh net10.0
+
 PROJECT="Jellyfin.Plugin.YouTubeTrailers"
-VERSION="1.1.7.0"
+VERSION="1.2.0.0"
 PLUGIN_GUID="00e99003-cf35-4a65-bf44-35104dfeb76a"
 
 REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
@@ -11,11 +17,51 @@ OUT_DIR="$REPO_ROOT/out"
 PLUGINS_DIR="$HOME/Library/Application Support/jellyfin/plugins"
 INSTALL_DIR="$PLUGINS_DIR/${PROJECT}_${VERSION}"
 
+# Refuse to deploy over a running server.
+#
+# Jellyfin memory-maps plugin assemblies. Replacing or deleting one while the
+# server is live leaves the process reading pages that no longer back the file,
+# so any method it JIT-compiles *after* that point gets garbage IL. It surfaces
+# as BadImageFormatException / InvalidProgramException / "Bad binary signature"
+# from random endpoints — and, worst of all, only from the endpoints that hadn't
+# been hit yet, which makes it look like a code bug in whatever you just edited.
+#
+# Note that quitting the Jellyfin.app wrapper does NOT stop the server child
+# process, so check for the actual process, not the app.
+if pgrep -fi jellyfin >/dev/null 2>&1; then
+  echo "ERROR: Jellyfin is still running — refusing to replace plugin files underneath it." >&2
+  echo "       Deploying now would corrupt the running process's mapped assembly." >&2
+  echo "       Stop it first:  osascript -e 'quit app \"Jellyfin\"'; pkill -fi jellyfin" >&2
+  pgrep -fil jellyfin >&2
+  exit 1
+fi
+
+# ── Which ABI does the installed server need? ────────────────────────────────
+# Jellyfin 12 runs on .NET 10 and ships a different Controller assembly than
+# 10.11; we build against both and pick by the installed server's major version.
+detect_framework() {
+  local controller="/Applications/Jellyfin.app/Contents/MacOS/MediaBrowser.Controller.dll"
+  if [ -f "$controller" ]; then
+    if strings "$controller" 2>/dev/null | grep -qE '^12\.[0-9]+\.[0-9]+'; then
+      echo "net10.0"; return
+    fi
+  fi
+  echo "net9.0"
+}
+
+FRAMEWORK="${1:-$(detect_framework)}"
+case "$FRAMEWORK" in
+  net9.0)  ABI="10.11.0.0" ;;
+  net10.0) ABI="12.0.0.0" ;;
+  *) echo "ERROR: unknown framework '$FRAMEWORK' (expected net9.0 or net10.0)" >&2; exit 1 ;;
+esac
+echo "Building for $FRAMEWORK (targetAbi $ABI)"
+
 rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR"
 
 dotnet publish "$PROJ_DIR/$PROJECT.csproj" \
-  -c Release -f net9.0 \
+  -c Release -f "$FRAMEWORK" \
   -o "$OUT_DIR" \
   --nologo
 
@@ -28,9 +74,9 @@ cat > "$OUT_DIR/meta.json" <<EOF
   "owner": "local",
   "category": "General",
   "overview": "Native HLS YouTube trailers for AVPlayer-based clients",
-  "targetAbi": "10.11.0.0",
+  "targetAbi": "$ABI",
   "version": "$VERSION",
-  "changelog": "1.0.0 — server-side YouTube trailer resolution (yt-dlp + ffmpeg) served as AVPlayer-native HLS for in-app + Top Shelf; config page with cache management, prune task, and yt-dlp arguments/version.",
+  "changelog": "Local dev build ($FRAMEWORK).",
   "timestamp": "$TS",
   "status": 0,
   "autoUpdate": false,
