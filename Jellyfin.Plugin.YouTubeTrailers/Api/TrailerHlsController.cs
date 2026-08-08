@@ -181,9 +181,16 @@ public sealed class TrailerHlsController : ControllerBase
 
     private static string ExtractToken(HttpRequest request)
     {
-        if (request.Query.TryGetValue("api_key", out var q) && !string.IsNullOrEmpty(q))
+        // `ApiKey` is what Jellyfin 12 clients send (legacy `api_key` is rejected
+        // there once EnableLegacyAuthorization is off — which the 12 upgrade
+        // migration forces). Older clients still send `api_key`; accept both.
+        if (request.Query.TryGetValue("ApiKey", out var q) && !string.IsNullOrEmpty(q))
         {
             return q!;
+        }
+        if (request.Query.TryGetValue("api_key", out var legacy) && !string.IsNullOrEmpty(legacy))
+        {
+            return legacy!;
         }
         if (request.Headers.TryGetValue("X-Emby-Token", out var h) && !string.IsNullOrEmpty(h))
         {

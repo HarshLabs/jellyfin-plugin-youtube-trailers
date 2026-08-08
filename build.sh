@@ -8,7 +8,7 @@ set -euo pipefail
 # don't have to think about it. Override with:  ./build.sh net10.0
 
 PROJECT="Jellyfin.Plugin.YouTubeTrailers"
-VERSION="1.2.0.0"
+VERSION="1.2.1.0"
 PLUGIN_GUID="00e99003-cf35-4a65-bf44-35104dfeb76a"
 
 REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"

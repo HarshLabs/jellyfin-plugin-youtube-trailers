@@ -1224,8 +1224,12 @@ public sealed class TrailerResolver
         {
             return playlist;
         }
-        playlist = playlist.Replace($"URI=\"{InitName}\"", $"URI=\"{InitName}?api_key={token}\"", StringComparison.Ordinal);
-        playlist = Regex.Replace(playlist, @"(?m)^(seg\d+\.m4s)$", $"$1?api_key={token}");
+        // `ApiKey` is read unconditionally by every supported server (10.8 -> 12);
+        // legacy `api_key` is rejected on Jellyfin 12 once EnableLegacyAuthorization
+        // is off, which the 12 upgrade migration forces. Segment requests carrying
+        // the legacy name would 401 there and AVPlayer surfaces it as -1013.
+        playlist = playlist.Replace($"URI=\"{InitName}\"", $"URI=\"{InitName}?ApiKey={token}\"", StringComparison.Ordinal);
+        playlist = Regex.Replace(playlist, @"(?m)^(seg\d+\.m4s)$", $"$1?ApiKey={token}");
         return playlist;
     }
 
