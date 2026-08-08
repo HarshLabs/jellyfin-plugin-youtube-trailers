@@ -9,6 +9,22 @@
         "imageUrl": "https://raw.githubusercontent.com/HarshLabs/jellyfin-plugin-youtube-trailers/main/assets/icon.png",
         "versions": [
             {
+                "version": "1.2.2.0",
+                "changelog": "Faster trailer start: HLS segments are now 2 seconds instead of 4, roughly halving the time from a cold request to first frame. No behavior change for already-cached trailers.\n",
+                "targetAbi": "12.0.0.0",
+                "sourceUrl": "https://github.com/HarshLabs/jellyfin-plugin-youtube-trailers/releases/download/v1.2.2.0/youtube-trailers_1.2.2.0_jf12.zip",
+                "checksum": "9d92a48aa4a832492479f1a5bb3698e4",
+                "timestamp": "2026-08-08T18:34:30Z"
+            },
+            {
+                "version": "1.2.2.0",
+                "changelog": "Faster trailer start: HLS segments are now 2 seconds instead of 4, roughly halving the time from a cold request to first frame. No behavior change for already-cached trailers.\n",
+                "targetAbi": "10.11.0.0",
+                "sourceUrl": "https://github.com/HarshLabs/jellyfin-plugin-youtube-trailers/releases/download/v1.2.2.0/youtube-trailers_1.2.2.0_jf10.11.zip",
+                "checksum": "2e061768dda2cc1f0a5647557d34bfb2",
+                "timestamp": "2026-08-08T18:34:30Z"
+            },
+            {
                 "version": "1.2.1.0",
                 "changelog": "Fixes trailers failing to start on Jellyfin 12 servers. Segment URLs are now signed with the ApiKey parameter (accepted by all supported Jellyfin versions), and the plugin accepts tokens from both ApiKey and legacy api_key clients. Fully backward compatible with Jellyfin 10.11.\n",
                 "targetAbi": "12.0.0.0",
