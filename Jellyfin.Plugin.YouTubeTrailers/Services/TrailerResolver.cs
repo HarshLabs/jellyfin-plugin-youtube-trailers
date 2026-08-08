@@ -930,8 +930,12 @@ public sealed class TrailerResolver
         psi.ArgumentList.Add("copy");
         psi.ArgumentList.Add("-f");
         psi.ArgumentList.Add("hls");
+        // 2s target (keyframe-bound with -c copy, so real segments track the
+        // GOP): halves time-to-seg0 — the WaitForPlayableAsync gate — and lets
+        // AVPlayer fill its startup buffer in finer increments, cutting ~2s off
+        // a cold start versus 4s segments. The extra segment count is trivial.
         psi.ArgumentList.Add("-hls_time");
-        psi.ArgumentList.Add("4");
+        psi.ArgumentList.Add("2");
         psi.ArgumentList.Add("-hls_playlist_type");
         psi.ArgumentList.Add("event");
         psi.ArgumentList.Add("-hls_segment_type");
