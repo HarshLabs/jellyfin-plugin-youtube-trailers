@@ -9,6 +9,22 @@
         "imageUrl": "https://raw.githubusercontent.com/HarshLabs/jellyfin-plugin-youtube-trailers/main/assets/icon.png",
         "versions": [
             {
+                "version": "1.2.1.0",
+                "changelog": "Fixes trailers failing to start on Jellyfin 12 servers. Segment URLs are now signed with the ApiKey parameter (accepted by all supported Jellyfin versions), and the plugin accepts tokens from both ApiKey and legacy api_key clients. Fully backward compatible with Jellyfin 10.11.\n",
+                "targetAbi": "12.0.0.0",
+                "sourceUrl": "https://github.com/HarshLabs/jellyfin-plugin-youtube-trailers/releases/download/v1.2.1.0/youtube-trailers_1.2.1.0_jf12.zip",
+                "checksum": "184c2bfb7c59915ed3a306bc1a98c5ab",
+                "timestamp": "2026-08-08T05:05:44Z"
+            },
+            {
+                "version": "1.2.1.0",
+                "changelog": "Fixes trailers failing to start on Jellyfin 12 servers. Segment URLs are now signed with the ApiKey parameter (accepted by all supported Jellyfin versions), and the plugin accepts tokens from both ApiKey and legacy api_key clients. Fully backward compatible with Jellyfin 10.11.\n",
+                "targetAbi": "10.11.0.0",
+                "sourceUrl": "https://github.com/HarshLabs/jellyfin-plugin-youtube-trailers/releases/download/v1.2.1.0/youtube-trailers_1.2.1.0_jf10.11.zip",
+                "checksum": "95f494e22d3ed5a0b3d5a8ae0e9f9e42",
+                "timestamp": "2026-08-08T05:05:44Z"
+            },
+            {
                 "version": "1.2.0.0",
                 "changelog": "Watch trailers build in real time \u2014 resolving, queued, and building phases with\na live progress percentage, download speed, and per-job cancel.\n\nCache trailers automatically for newly added media, on a nightly library sweep,\nor in bulk from the dashboard. Scope it to just the libraries you want.\n\nWhen a trailer won't download, Diagnose walks the whole pipeline for that one\nvideo \u2014 yt-dlp and ffmpeg, YouTube metadata, format selection, CDN reachability,\nthen a real stream-copy \u2014 and tells you which stage broke and how to fix it. A\nfailure log keeps the exact command and tool output for the last 100 failures.\n\nQuality is now a simple preset instead of raw yt-dlp syntax, cookies are a\nfirst-class setting (the usual fix for \"confirm you're not a bot\"), and there's\na download speed limit for slow uplinks. Max concurrent builds applies without\na server restart.\n\nAlso fixed: cached trailers you actually watch are no longer evicted as if they\nwere never played; the dashboard layout no longer breaks at narrower widths; and\nsticky table headers are readable again.\n\nNow supports Jellyfin 12 alongside 10.11 \u2014 your server automatically installs\nthe right build.\n",
                 "targetAbi": "12.0.0.0",
