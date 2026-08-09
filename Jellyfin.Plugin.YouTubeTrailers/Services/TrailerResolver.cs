@@ -62,6 +62,17 @@ public sealed class TrailerResolver
     // re-running the full timeout on every request. This is what makes the
     // client's "try the next trailer" fallback quick on repeat/prewarmed plays.
     private readonly ConcurrentDictionary<string, FailureMark> _recentFailures = new();
+
+    /// <summary>
+    /// Videos whose primary googlevideo edge delivered no data (watchdog kill),
+    /// keyed to when the one fallback-edge rebuild was scheduled. Presence of a
+    /// recent entry means (a) the next build for that id rewrites its URLs to
+    /// the fallback host and (b) a second watchdog kill fails for real instead
+    /// of looping. Cleared on a completed build; entries age out via the TTL.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, DateTime> _fallbackAttempts = new();
+
+    private static readonly TimeSpan FallbackSignalTtl = TimeSpan.FromMinutes(10);
     // Bounded ring of finished builds so the dashboard can show what just
     // happened, not only what is happening right now.
     private readonly object _historySync = new();
@@ -846,6 +857,16 @@ public sealed class TrailerResolver
         var videoId = job.VideoId;
         var urls = resolved.Urls;
 
+        // A recent watchdog kill flagged this video's primary CDN edge as dead
+        // (see the fallback comment in the build monitor). Rewrite THIS build's
+        // freshly resolved URLs to googlevideo's advertised fallback host —
+        // fresh signature and expiry, different edge cluster.
+        if (RecentFallbackAttempt(videoId) && RewriteToFallbackHost(urls) is { } fallbackUrls)
+        {
+            urls = fallbackUrls;
+            _logger.LogInformation("[YouTubeTrailers] {VideoId}: building via fallback CDN edge", videoId);
+        }
+
         var ffmpeg = _tools.ResolveFfmpeg();
         if (ffmpeg is null)
         {
@@ -1029,18 +1050,51 @@ public sealed class TrailerResolver
                 }
                 else if (process.ExitCode != 0 || !IsComplete(videoId))
                 {
-                    var tail = ToolRunner.TailLines(stderr.ToString());
-                    var reason = job.WatchdogKilled
-                        ? $"No first segment within {NoSegmentTimeoutSeconds}s — build killed. The CDN edge accepted the "
-                          + "connection but never delivered data; ffmpeg's reconnect would retry forever."
-                        : process.ExitCode != 0
-                            ? $"ffmpeg exited {process.ExitCode} after {elapsedMs} ms."
-                            : "ffmpeg exited 0 but the playlist has no EXT-X-ENDLIST — the remux stopped early.";
-                    FailJob(job, JobPhases.Building, reason, process.ExitCode, tail, command);
+                    // A watchdog kill means the PRIMARY CDN edge accepted the
+                    // connection but never delivered data (observed: Windows
+                    // ffmpeg error -138 against one googlevideo cluster while
+                    // every other edge worked). googlevideo URLs advertise a
+                    // FALLBACK host in their `mn=` parameter and yt-dlp's own
+                    // downloader rotates to it on exactly this failure; ffmpeg
+                    // only ever tries the primary. So: one rebuild through the
+                    // fallback edge before the failure is negative-cached. The
+                    // rebuild re-enters via StartIfNeededAsync AFTER this job's
+                    // eviction; the fresh resolve's URLs get host-rewritten in
+                    // StartRemuxAsync via the _fallbackAttempts signal.
+                    if (job.WatchdogKilled
+                        && !job.Canceled
+                        && RewriteToFallbackHost(urls) is not null
+                        && !RecentFallbackAttempt(videoId))
+                    {
+                        _fallbackAttempts[videoId] = DateTime.UtcNow;
+                        _logger.LogWarning(
+                            "[YouTubeTrailers] {VideoId}: primary CDN edge delivered no data — retrying once via the fallback edge",
+                            videoId);
+                        _ = Task.Run(async () =>
+                        {
+                            // Let this job's finally block evict it from _jobs
+                            // first, so the rebuild registers fresh instead of
+                            // joining the corpse.
+                            await Task.Delay(500).ConfigureAwait(false);
+                            await StartIfNeededAsync(videoId, CancellationToken.None, "fallback-edge").ConfigureAwait(false);
+                        });
+                    }
+                    else
+                    {
+                        var tail = ToolRunner.TailLines(stderr.ToString());
+                        var reason = job.WatchdogKilled
+                            ? $"No first segment within {NoSegmentTimeoutSeconds}s — build killed. The CDN edge accepted the "
+                              + "connection but never delivered data; ffmpeg's reconnect would retry forever."
+                            : process.ExitCode != 0
+                                ? $"ffmpeg exited {process.ExitCode} after {elapsedMs} ms."
+                                : "ffmpeg exited 0 but the playlist has no EXT-X-ENDLIST — the remux stopped early.";
+                        FailJob(job, JobPhases.Building, reason, process.ExitCode, tail, command);
+                    }
                 }
                 else
                 {
                     _recentFailures.TryRemove(videoId, out _); // recovered — clear any prior failure
+                    _fallbackAttempts.TryRemove(videoId, out _);
                     job.Phase = JobPhases.Completed;
                     job.EndedUtc = DateTime.UtcNow;
                     var final = MeasureBundle(videoId);
@@ -1219,6 +1273,66 @@ public sealed class TrailerResolver
         {
             return null;
         }
+    }
+
+    private bool RecentFallbackAttempt(string videoId) =>
+        _fallbackAttempts.TryGetValue(videoId, out var when)
+        && DateTime.UtcNow - when < FallbackSignalTtl;
+
+    /// <summary>
+    /// Rewrites googlevideo URLs to the fallback CDN host each URL advertises
+    /// in its <c>mn=</c> parameter (<c>mn=&lt;primary&gt;,&lt;fallback&gt;</c>).
+    /// The URL signature does not cover the host (that is how yt-dlp's own
+    /// downloader legally rotates hosts on connection failure), so the swap is
+    /// a pure transport change. Returns null when any URL has no distinct
+    /// fallback host — callers then keep the primary and fail normally.
+    /// </summary>
+    internal static string[]? RewriteToFallbackHost(string[] urls)
+    {
+        var result = new string[urls.Length];
+        var changed = false;
+        for (var i = 0; i < urls.Length; i++)
+        {
+            result[i] = urls[i];
+            if (!Uri.TryCreate(urls[i], UriKind.Absolute, out var uri)
+                || !uri.Host.EndsWith(".googlevideo.com", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+            var sep = uri.Host.IndexOf("---", StringComparison.Ordinal);
+            if (sep <= 0)
+            {
+                continue;
+            }
+            var primarySn = uri.Host[(sep + 3)..uri.Host.IndexOf(".googlevideo.com", StringComparison.OrdinalIgnoreCase)];
+
+            string? mn = null;
+            foreach (var pair in uri.Query.TrimStart('?').Split('&'))
+            {
+                if (pair.StartsWith("mn=", StringComparison.Ordinal))
+                {
+                    mn = Uri.UnescapeDataString(pair[3..]);
+                    break;
+                }
+            }
+            if (mn is null)
+            {
+                continue;
+            }
+            var hosts = mn.Split(',');
+            if (hosts.Length < 2 || string.IsNullOrEmpty(hosts[1])
+                || string.Equals(hosts[1], primarySn, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            // Plain string swap of the host, NOT UriBuilder: rebuilding the
+            // URI could re-encode the signed query and invalidate `sig`.
+            var newHost = uri.Host[..(sep + 3)] + hosts[1] + ".googlevideo.com";
+            result[i] = urls[i].Replace("://" + uri.Host, "://" + newHost, StringComparison.OrdinalIgnoreCase);
+            changed = true;
+        }
+        return changed ? result : null;
     }
 
     /// <summary>Rewrites init/segment URIs in a served playlist to carry the caller's auth token.</summary>
