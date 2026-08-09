@@ -9,6 +9,22 @@
         "imageUrl": "https://raw.githubusercontent.com/HarshLabs/jellyfin-plugin-youtube-trailers/main/assets/icon.png",
         "versions": [
             {
+                "version": "1.2.3.2",
+                "changelog": "Hardens the fallback-CDN retry from v1.2.3.1 based on a full code review: failed builds are now always recorded (history, diagnostics with ffmpeg stderr, negative cache) before the fallback rebuild is scheduled, so clients fast-fail instead of hanging and the dashboard shows every kill; the rebuild is spawned race-free after job eviction and covers fast-exit edge failures (immediate 403/refused), not just watchdog kills; fallback markers are self-pruning and cleared by the admin retry action; DNS probes are cancellable and deduplicated; log lines report the actual swapped host. No behavior change for healthy builds. Supports Jellyfin 10.11 and 12.\n",
+                "targetAbi": "12.0.0.0",
+                "sourceUrl": "https://github.com/HarshLabs/jellyfin-plugin-youtube-trailers/releases/download/v1.2.3.2/youtube-trailers_1.2.3.2_jf12.zip",
+                "checksum": "91d7a3fcd55be085bb4143880e670b35",
+                "timestamp": "2026-08-09T05:40:00Z"
+            },
+            {
+                "version": "1.2.3.2",
+                "changelog": "Hardens the fallback-CDN retry from v1.2.3.1 based on a full code review: failed builds are now always recorded (history, diagnostics with ffmpeg stderr, negative cache) before the fallback rebuild is scheduled, so clients fast-fail instead of hanging and the dashboard shows every kill; the rebuild is spawned race-free after job eviction and covers fast-exit edge failures (immediate 403/refused), not just watchdog kills; fallback markers are self-pruning and cleared by the admin retry action; DNS probes are cancellable and deduplicated; log lines report the actual swapped host. No behavior change for healthy builds. Supports Jellyfin 10.11 and 12.\n",
+                "targetAbi": "10.11.0.0",
+                "sourceUrl": "https://github.com/HarshLabs/jellyfin-plugin-youtube-trailers/releases/download/v1.2.3.2/youtube-trailers_1.2.3.2_jf10.11.zip",
+                "checksum": "4c0a2d042d799cbb8c4de0d0552c20c5",
+                "timestamp": "2026-08-09T05:40:00Z"
+            },
+            {
                 "version": "1.2.3.1",
                 "changelog": "Fixes the fallback-CDN retry introduced in 1.2.3.0: the fallback hostname now uses the URL's fvip prefix number (reusing the primary's number produced hostnames that don't exist in DNS), and every candidate host is DNS-verified server-side before ffmpeg is launched \u2014 if nothing resolves, the build fails normally instead of wasting the retry. Supports Jellyfin 10.11 and 12.\n",
                 "targetAbi": "12.0.0.0",
