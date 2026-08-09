@@ -860,11 +860,14 @@ public sealed class TrailerResolver
         // A recent watchdog kill flagged this video's primary CDN edge as dead
         // (see the fallback comment in the build monitor). Rewrite THIS build's
         // freshly resolved URLs to googlevideo's advertised fallback host —
-        // fresh signature and expiry, different edge cluster.
-        if (RecentFallbackAttempt(videoId) && RewriteToFallbackHost(urls) is { } fallbackUrls)
+        // fresh signature and expiry, different edge cluster, DNS-verified
+        // before ffmpeg ever sees it.
+        if (RecentFallbackAttempt(videoId)
+            && await RewriteToFallbackHostAsync(urls).ConfigureAwait(false) is { } fallbackUrls)
         {
             urls = fallbackUrls;
-            _logger.LogInformation("[YouTubeTrailers] {VideoId}: building via fallback CDN edge", videoId);
+            _logger.LogInformation("[YouTubeTrailers] {VideoId}: building via fallback CDN edge {Host}",
+                videoId, new Uri(fallbackUrls[0]).Host);
         }
 
         var ffmpeg = _tools.ResolveFfmpeg();
@@ -1063,7 +1066,7 @@ public sealed class TrailerResolver
                     // StartRemuxAsync via the _fallbackAttempts signal.
                     if (job.WatchdogKilled
                         && !job.Canceled
-                        && RewriteToFallbackHost(urls) is not null
+                        && HasFallbackCandidate(urls)
                         && !RecentFallbackAttempt(videoId))
                     {
                         _fallbackAttempts[videoId] = DateTime.UtcNow;
@@ -1280,59 +1283,149 @@ public sealed class TrailerResolver
         && DateTime.UtcNow - when < FallbackSignalTtl;
 
     /// <summary>
-    /// Rewrites googlevideo URLs to the fallback CDN host each URL advertises
-    /// in its <c>mn=</c> parameter (<c>mn=&lt;primary&gt;,&lt;fallback&gt;</c>).
-    /// The URL signature does not cover the host (that is how yt-dlp's own
-    /// downloader legally rotates hosts on connection failure), so the swap is
-    /// a pure transport change. Returns null when any URL has no distinct
-    /// fallback host — callers then keep the primary and fail normally.
+    /// Structural pre-check for the build monitor: true when at least one URL
+    /// carries a distinct fallback cluster in its <c>mn=</c> parameter. Cheap
+    /// and synchronous — the DNS-verified rewrite happens later, in
+    /// <see cref="RewriteToFallbackHostAsync"/>.
     /// </summary>
-    internal static string[]? RewriteToFallbackHost(string[] urls)
+    internal static bool HasFallbackCandidate(string[] urls)
+    {
+        foreach (var url in urls)
+        {
+            if (ParseGoogleVideoHost(url) is { } parsed && parsed.FallbackSn is not null)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Rewrites googlevideo URLs to their fallback CDN cluster (the second
+    /// entry of the <c>mn=</c> parameter). The URL signature does not cover
+    /// the host — that is how yt-dlp's own downloader legally rotates hosts on
+    /// connection failure — so the swap is a pure transport change.
+    ///
+    /// Host construction is verified, not guessed: the prefix NUMBER differs
+    /// per cluster (reusing the primary's produced <c>rr11---sn-hp57kn6y</c>,
+    /// which does not exist in DNS — observed live). Candidates are the URL's
+    /// own <c>fvip=</c> number, then host #1 (present on every cluster), and
+    /// each candidate is DNS-resolved server-side BEFORE ffmpeg ever sees it.
+    /// Returns null when no candidate resolves — callers then keep the primary
+    /// and fail normally instead of burning the one retry on a phantom host.
+    /// </summary>
+    internal static async Task<string[]?> RewriteToFallbackHostAsync(string[] urls)
     {
         var result = new string[urls.Length];
         var changed = false;
         for (var i = 0; i < urls.Length; i++)
         {
             result[i] = urls[i];
-            if (!Uri.TryCreate(urls[i], UriKind.Absolute, out var uri)
-                || !uri.Host.EndsWith(".googlevideo.com", StringComparison.OrdinalIgnoreCase))
+            if (ParseGoogleVideoHost(urls[i]) is not { } parsed || parsed.FallbackSn is null)
             {
                 continue;
             }
-            var sep = uri.Host.IndexOf("---", StringComparison.Ordinal);
-            if (sep <= 0)
-            {
-                continue;
-            }
-            var primarySn = uri.Host[(sep + 3)..uri.Host.IndexOf(".googlevideo.com", StringComparison.OrdinalIgnoreCase)];
 
-            string? mn = null;
-            foreach (var pair in uri.Query.TrimStart('?').Split('&'))
+            string? newHost = null;
+            foreach (var number in parsed.PrefixCandidates)
             {
-                if (pair.StartsWith("mn=", StringComparison.Ordinal))
+                var candidate = parsed.PrefixLetters + number + "---" + parsed.FallbackSn + ".googlevideo.com";
+                if (await HostResolvesAsync(candidate).ConfigureAwait(false))
                 {
-                    mn = Uri.UnescapeDataString(pair[3..]);
+                    newHost = candidate;
                     break;
                 }
             }
-            if (mn is null)
+            if (newHost is null)
             {
-                continue;
-            }
-            var hosts = mn.Split(',');
-            if (hosts.Length < 2 || string.IsNullOrEmpty(hosts[1])
-                || string.Equals(hosts[1], primarySn, StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
+                return null;
             }
 
             // Plain string swap of the host, NOT UriBuilder: rebuilding the
             // URI could re-encode the signed query and invalidate `sig`.
-            var newHost = uri.Host[..(sep + 3)] + hosts[1] + ".googlevideo.com";
-            result[i] = urls[i].Replace("://" + uri.Host, "://" + newHost, StringComparison.OrdinalIgnoreCase);
+            result[i] = urls[i].Replace("://" + parsed.Host, "://" + newHost, StringComparison.OrdinalIgnoreCase);
             changed = true;
         }
         return changed ? result : null;
+    }
+
+    private readonly record struct GoogleVideoHostParts(
+        string Host, string PrefixLetters, string? FallbackSn, string[] PrefixCandidates);
+
+    /// <summary>
+    /// Parses a googlevideo URL into the pieces the fallback rewrite needs.
+    /// Host shape: <c>{letters}{number}---{sn-cluster}.googlevideo.com</c>
+    /// (e.g. <c>rr11---sn-bvvbaxivnuxqjvhj5nu-hp56</c>). Returns null for
+    /// anything that is not a well-formed googlevideo host.
+    /// </summary>
+    private static GoogleVideoHostParts? ParseGoogleVideoHost(string url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)
+            || !uri.Host.EndsWith(".googlevideo.com", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+        var sep = uri.Host.IndexOf("---", StringComparison.Ordinal);
+        if (sep <= 0)
+        {
+            return null;
+        }
+        var prefix = uri.Host[..sep];
+        var letterCount = 0;
+        while (letterCount < prefix.Length && char.IsAsciiLetter(prefix[letterCount]))
+        {
+            letterCount++;
+        }
+        if (letterCount == 0)
+        {
+            return null;
+        }
+        var primarySn = uri.Host[(sep + 3)..uri.Host.IndexOf(".googlevideo.com", StringComparison.OrdinalIgnoreCase)];
+
+        string? mn = null;
+        string? fvip = null;
+        foreach (var pair in uri.Query.TrimStart('?').Split('&'))
+        {
+            if (pair.StartsWith("mn=", StringComparison.Ordinal))
+            {
+                mn = Uri.UnescapeDataString(pair[3..]);
+            }
+            else if (pair.StartsWith("fvip=", StringComparison.Ordinal))
+            {
+                fvip = pair[5..];
+            }
+        }
+
+        string? fallbackSn = null;
+        if (mn is not null)
+        {
+            var hosts = mn.Split(',');
+            if (hosts.Length >= 2 && !string.IsNullOrEmpty(hosts[1])
+                && !string.Equals(hosts[1], primarySn, StringComparison.OrdinalIgnoreCase))
+            {
+                fallbackSn = hosts[1];
+            }
+        }
+
+        var candidates = fvip is not null && fvip != "1" && fvip.Length <= 3
+            ? new[] { fvip, "1" }
+            : new[] { "1" };
+        return new GoogleVideoHostParts(uri.Host, prefix[..letterCount], fallbackSn, candidates);
+    }
+
+    /// <summary>Bounded DNS probe — a host that does not resolve within 3s is treated as nonexistent.</summary>
+    private static async Task<bool> HostResolvesAsync(string host)
+    {
+        try
+        {
+            var lookup = System.Net.Dns.GetHostAddressesAsync(host);
+            var finished = await Task.WhenAny(lookup, Task.Delay(TimeSpan.FromSeconds(3))).ConfigureAwait(false);
+            return finished == lookup && (await lookup.ConfigureAwait(false)).Length > 0;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     /// <summary>Rewrites init/segment URIs in a served playlist to carry the caller's auth token.</summary>
