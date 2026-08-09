@@ -8,7 +8,7 @@ set -euo pipefail
 # don't have to think about it. Override with:  ./build.sh net10.0
 
 PROJECT="Jellyfin.Plugin.YouTubeTrailers"
-VERSION="1.2.3.1"
+VERSION="1.2.3.2"
 PLUGIN_GUID="00e99003-cf35-4a65-bf44-35104dfeb76a"
 
 REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
@@ -28,11 +28,17 @@ INSTALL_DIR="$PLUGINS_DIR/${PROJECT}_${VERSION}"
 #
 # Note that quitting the Jellyfin.app wrapper does NOT stop the server child
 # process, so check for the actual process, not the app.
-if pgrep -x jellyfin >/dev/null 2>&1 || pgrep -f "Jellyfin Server" >/dev/null 2>&1; then
+# Three shapes: the bare server binary, the .app's wrapper child, and a
+# source run via `dotnet .../Jellyfin.Server.dll`.
+if pgrep -x jellyfin >/dev/null 2>&1 \
+  || pgrep -f "Jellyfin Server" >/dev/null 2>&1 \
+  || pgrep -f "Jellyfin.Server.dll" >/dev/null 2>&1; then
   echo "ERROR: Jellyfin is still running — refusing to replace plugin files underneath it." >&2
   echo "       Deploying now would corrupt the running process's mapped assembly." >&2
-  echo "       Stop it first:  osascript -e 'quit app \"Jellyfin\"'; pkill -fi jellyfin" >&2
-  pgrep -xl jellyfin >&2
+  echo "       Stop it first:  osascript -e 'quit app \"Jellyfin\"'; pkill -x jellyfin; pkill -f 'Jellyfin Server'" >&2
+  # List whichever shape tripped the guard; each may legitimately match nothing,
+  # and under set -e a bare failing pgrep would abort before the exit message.
+  { pgrep -xl jellyfin || true; pgrep -fl "Jellyfin Server" || true; pgrep -fl "Jellyfin.Server.dll" || true; } >&2
   exit 1
 fi
 

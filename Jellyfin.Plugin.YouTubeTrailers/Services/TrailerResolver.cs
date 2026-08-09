@@ -508,15 +508,26 @@ public sealed class TrailerResolver
             .ToList();
     }
 
-    /// <summary>Drops all negative-cache entries so blocked videos are retried immediately.</summary>
+    /// <summary>
+    /// Drops all negative-cache entries so blocked videos are retried
+    /// immediately. Also clears the fallback-edge markers: an admin retry
+    /// means "start over from scratch", which must include a fresh primary
+    /// attempt with the full fallback budget — not a build force-rewritten to
+    /// the fallback cluster with its one retry already spent.
+    /// </summary>
     public int ClearNegativeCache()
     {
         var n = _recentFailures.Count;
         _recentFailures.Clear();
+        _fallbackAttempts.Clear();
         return n;
     }
 
-    public bool ClearNegativeCache(string videoId) => _recentFailures.TryRemove(videoId, out _);
+    public bool ClearNegativeCache(string videoId)
+    {
+        _fallbackAttempts.TryRemove(videoId, out _);
+        return _recentFailures.TryRemove(videoId, out _);
+    }
 
     /// <summary>
     /// Cancels an in-flight build: kills ffmpeg (or aborts the resolve), drops
@@ -635,7 +646,8 @@ public sealed class TrailerResolver
         string videoId,
         CancellationToken cancellationToken,
         string source = "playback",
-        string? label = null)
+        string? label = null,
+        bool bypassNegativeCache = false)
     {
         if (!IsValidVideoId(videoId))
         {
@@ -656,7 +668,10 @@ public sealed class TrailerResolver
         // Negative-cache fast path: if this video failed recently, don't spend
         // another full timeout — fail immediately so the client moves on to the
         // next candidate. Stale entries fall through to a fresh attempt.
-        if (_recentFailures.TryGetValue(videoId, out var mark))
+        // The fallback-edge rebuild bypasses this: its triggering failure was
+        // JUST recorded (deliberately, so waiters fast-fail and the dashboard
+        // shows the kill), and the rebuild itself is the sanctioned retry.
+        if (!bypassNegativeCache && _recentFailures.TryGetValue(videoId, out var mark))
         {
             if (DateTime.UtcNow - mark.WhenUtc < FailureTtl)
             {
@@ -862,12 +877,28 @@ public sealed class TrailerResolver
         // freshly resolved URLs to googlevideo's advertised fallback host —
         // fresh signature and expiry, different edge cluster, DNS-verified
         // before ffmpeg ever sees it.
-        if (RecentFallbackAttempt(videoId)
-            && await RewriteToFallbackHostAsync(urls).ConfigureAwait(false) is { } fallbackUrls)
+        if (RecentFallbackAttempt(videoId))
         {
-            urls = fallbackUrls;
-            _logger.LogInformation("[YouTubeTrailers] {VideoId}: building via fallback CDN edge {Host}",
-                videoId, new Uri(fallbackUrls[0]).Host);
+            var originals = urls;
+            if (await RewriteToFallbackHostAsync(urls).ConfigureAwait(false) is { } fallbackUrls)
+            {
+                urls = fallbackUrls;
+                // Log the hosts that actually CHANGED — an operator confirms
+                // the feature by this line, so it must never name a host that
+                // is still the primary.
+                var swapped = fallbackUrls
+                    .Where((u, idx) => !string.Equals(u, originals[idx], StringComparison.Ordinal))
+                    .Select(u => new Uri(u).Host)
+                    .Distinct(StringComparer.OrdinalIgnoreCase);
+                _logger.LogInformation("[YouTubeTrailers] {VideoId}: building via fallback CDN edge {Hosts}",
+                    videoId, string.Join(", ", swapped));
+            }
+            else
+            {
+                _logger.LogWarning(
+                    "[YouTubeTrailers] {VideoId}: no resolvable fallback CDN host — building via the primary edge",
+                    videoId);
+            }
         }
 
         var ffmpeg = _tools.ResolveFfmpeg();
@@ -1039,6 +1070,7 @@ public sealed class TrailerResolver
         // Monitor exit asynchronously — records the outcome and releases the slot.
         job.RunTask = Task.Run(async () =>
         {
+            var scheduleFallbackRebuild = false;
             try
             {
                 await process.WaitForExitAsync().ConfigureAwait(false);
@@ -1053,46 +1085,45 @@ public sealed class TrailerResolver
                 }
                 else if (process.ExitCode != 0 || !IsComplete(videoId))
                 {
-                    // A watchdog kill means the PRIMARY CDN edge accepted the
-                    // connection but never delivered data (observed: Windows
-                    // ffmpeg error -138 against one googlevideo cluster while
-                    // every other edge worked). googlevideo URLs advertise a
-                    // FALLBACK host in their `mn=` parameter and yt-dlp's own
-                    // downloader rotates to it on exactly this failure; ffmpeg
-                    // only ever tries the primary. So: one rebuild through the
-                    // fallback edge before the failure is negative-cached. The
-                    // rebuild re-enters via StartIfNeededAsync AFTER this job's
-                    // eviction; the fresh resolve's URLs get host-rewritten in
-                    // StartRemuxAsync via the _fallbackAttempts signal.
-                    if (job.WatchdogKilled
-                        && !job.Canceled
+                    var tail = ToolRunner.TailLines(stderr.ToString());
+                    var reason = job.WatchdogKilled
+                        ? $"No first segment within {NoSegmentTimeoutSeconds}s — build killed. The CDN edge accepted the "
+                          + "connection but never delivered data."
+                        : process.ExitCode != 0
+                            ? $"ffmpeg exited {process.ExitCode} after {elapsedMs} ms."
+                            : "ffmpeg exited 0 but the playlist has no EXT-X-ENDLIST — the remux stopped early.";
+
+                    // Dead-edge self-heal: one rebuild through googlevideo's
+                    // advertised fallback cluster (see RewriteToFallbackHostAsync).
+                    // Eligible whenever the build produced NOTHING playable —
+                    // the watchdog kill (edge accepts TCP, sends no data) and a
+                    // fast nonzero exit (edge refuses / 403s immediately) are
+                    // the same network condition at different speeds, and the
+                    // rebuild's fresh yt-dlp resolve renews signatures, which
+                    // also heals stale-URL 403s.
+                    //
+                    // The job is FAILED FIRST, unconditionally: FailJob records
+                    // the history row, the diagnostics entry (with the ffmpeg
+                    // stderr evidence), and the negative-cache mark, so waiting
+                    // clients fast-fail instead of parking, repeat requests
+                    // 404 in microseconds while the rebuild runs, and the
+                    // dashboard tells the truth. A successful rebuild clears
+                    // the negative cache on completion. The rebuild itself is
+                    // spawned from the finally block AFTER this job's eviction,
+                    // so its re-entry can never race the corpse.
+                    scheduleFallbackRebuild = !job.Canceled
+                        && !IsPlayable(videoId)
                         && HasFallbackCandidate(urls)
-                        && !RecentFallbackAttempt(videoId))
+                        && !RecentFallbackAttempt(videoId);
+                    if (scheduleFallbackRebuild)
                     {
                         _fallbackAttempts[videoId] = DateTime.UtcNow;
+                        reason += " Retrying once via the fallback CDN edge.";
                         _logger.LogWarning(
-                            "[YouTubeTrailers] {VideoId}: primary CDN edge delivered no data — retrying once via the fallback edge",
+                            "[YouTubeTrailers] {VideoId}: build produced nothing playable — retrying once via the fallback edge",
                             videoId);
-                        _ = Task.Run(async () =>
-                        {
-                            // Let this job's finally block evict it from _jobs
-                            // first, so the rebuild registers fresh instead of
-                            // joining the corpse.
-                            await Task.Delay(500).ConfigureAwait(false);
-                            await StartIfNeededAsync(videoId, CancellationToken.None, "fallback-edge").ConfigureAwait(false);
-                        });
                     }
-                    else
-                    {
-                        var tail = ToolRunner.TailLines(stderr.ToString());
-                        var reason = job.WatchdogKilled
-                            ? $"No first segment within {NoSegmentTimeoutSeconds}s — build killed. The CDN edge accepted the "
-                              + "connection but never delivered data; ffmpeg's reconnect would retry forever."
-                            : process.ExitCode != 0
-                                ? $"ffmpeg exited {process.ExitCode} after {elapsedMs} ms."
-                                : "ffmpeg exited 0 but the playlist has no EXT-X-ENDLIST — the remux stopped early.";
-                        FailJob(job, JobPhases.Building, reason, process.ExitCode, tail, command);
-                    }
+                    FailJob(job, JobPhases.Building, reason, process.ExitCode, tail, command);
                 }
                 else
                 {
@@ -1125,6 +1156,18 @@ public sealed class TrailerResolver
                 // (a newer rebuild for the same id is left intact). Removing a
                 // failed job is what lets the next request retry from scratch.
                 _jobs.TryRemove(new KeyValuePair<string, TrailerJob>(videoId, job));
+
+                // Fallback-edge rebuild, spawned strictly AFTER eviction so the
+                // re-entry registers a fresh job (visible to the dashboard and
+                // CancelAll from birth) instead of joining this one's corpse.
+                // Bypasses the negative cache we just wrote — that entry exists
+                // for WAITERS; the rebuild is the sanctioned retry.
+                if (scheduleFallbackRebuild && Config?.Enabled == true)
+                {
+                    _ = Task.Run(() => StartIfNeededAsync(
+                        videoId, CancellationToken.None, "fallback-edge",
+                        job.Label ?? job.Title, bypassNegativeCache: true));
+                }
             }
         });
 
@@ -1278,9 +1321,21 @@ public sealed class TrailerResolver
         }
     }
 
-    private bool RecentFallbackAttempt(string videoId) =>
-        _fallbackAttempts.TryGetValue(videoId, out var when)
-        && DateTime.UtcNow - when < FallbackSignalTtl;
+    private bool RecentFallbackAttempt(string videoId)
+    {
+        if (!_fallbackAttempts.TryGetValue(videoId, out var when))
+        {
+            return false;
+        }
+        if (DateTime.UtcNow - when >= FallbackSignalTtl)
+        {
+            // Self-pruning: expired entries are dead weight (one per
+            // ever-killed video for the process lifetime otherwise).
+            _fallbackAttempts.TryRemove(new KeyValuePair<string, DateTime>(videoId, when));
+            return false;
+        }
+        return true;
+    }
 
     /// <summary>
     /// Structural pre-check for the build monitor: true when at least one URL
@@ -1314,10 +1369,21 @@ public sealed class TrailerResolver
     /// Returns null when no candidate resolves — callers then keep the primary
     /// and fail normally instead of burning the one retry on a phantom host.
     /// </summary>
+    /// <remarks>
+    /// All-or-nothing across the URL set, deliberately: rewriting only the
+    /// video stream while the audio stream stays on a dead primary produces a
+    /// mixed-cluster build that fails anyway — with a harder-to-read failure.
+    /// If any URL that HAS a fallback candidate cannot get a resolvable host,
+    /// the whole rewrite is abandoned and the build proceeds (and fails) on
+    /// the primary, which the caller logs.
+    /// </remarks>
     internal static async Task<string[]?> RewriteToFallbackHostAsync(string[] urls)
     {
         var result = new string[urls.Length];
         var changed = false;
+        // Both streams of an adaptive build almost always share host and
+        // cluster — memoize probes so identical candidates hit DNS once.
+        var probeCache = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
         for (var i = 0; i < urls.Length; i++)
         {
             result[i] = urls[i];
@@ -1330,7 +1396,12 @@ public sealed class TrailerResolver
             foreach (var number in parsed.PrefixCandidates)
             {
                 var candidate = parsed.PrefixLetters + number + "---" + parsed.FallbackSn + ".googlevideo.com";
-                if (await HostResolvesAsync(candidate).ConfigureAwait(false))
+                if (!probeCache.TryGetValue(candidate, out var resolves))
+                {
+                    resolves = await HostResolvesAsync(candidate).ConfigureAwait(false);
+                    probeCache[candidate] = resolves;
+                }
+                if (resolves)
                 {
                     newHost = candidate;
                     break;
@@ -1418,9 +1489,12 @@ public sealed class TrailerResolver
     {
         try
         {
-            var lookup = System.Net.Dns.GetHostAddressesAsync(host);
-            var finished = await Task.WhenAny(lookup, Task.Delay(TimeSpan.FromSeconds(3))).ConfigureAwait(false);
-            return finished == lookup && (await lookup.ConfigureAwait(false)).Length > 0;
+            // Real cancellation, not WhenAny-and-abandon: the timer dies with
+            // the scope on fast success, and a timed-out lookup is cancelled
+            // instead of left running with an unobserved exception.
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+            var addresses = await System.Net.Dns.GetHostAddressesAsync(host, cts.Token).ConfigureAwait(false);
+            return addresses.Length > 0;
         }
         catch
         {
