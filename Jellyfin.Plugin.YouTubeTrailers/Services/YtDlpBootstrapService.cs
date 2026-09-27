@@ -7,8 +7,9 @@ namespace Jellyfin.Plugin.YouTubeTrailers.Services;
 
 /// <summary>
 /// On server start, ensures a usable yt-dlp is present (downloads the managed
-/// standalone binary if none is found and auto-management is enabled). Runs in
-/// the background so it never blocks Jellyfin startup.
+/// standalone binary if none is found and auto-management is enabled) and
+/// updates it when a newer stable release exists. Runs in the background so it
+/// never blocks Jellyfin startup.
 /// </summary>
 public sealed class YtDlpBootstrapService : IHostedService
 {
@@ -30,6 +31,9 @@ public sealed class YtDlpBootstrapService : IHostedService
             try
             {
                 await _ytDlp.EnsureAsync(CancellationToken.None).ConfigureAwait(false);
+                // A server that was off (or never updated) for weeks may carry
+                // a yt-dlp YouTube no longer accepts; one cheap version check.
+                await _ytDlp.UpdateIfOutdatedAsync("server start", CancellationToken.None).ConfigureAwait(false);
             }
             catch (System.Exception ex)
             {

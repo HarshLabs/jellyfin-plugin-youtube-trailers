@@ -268,6 +268,7 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
 
         serviceCollection.AddSingleton<IScheduledTask, Tasks.PruneCacheTask>();
         serviceCollection.AddSingleton<IScheduledTask, Tasks.PrewarmLibraryTrailersTask>();
+        serviceCollection.AddSingleton<IScheduledTask, Tasks.UpdateYtDlpTask>();
 
         serviceCollection.AddHostedService<YtDlpBootstrapService>();
         // Optional (config-gated): cache a trailer whenever the scanner adds or

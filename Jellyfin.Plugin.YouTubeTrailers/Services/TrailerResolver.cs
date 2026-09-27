@@ -101,6 +101,16 @@ public sealed class TrailerResolver
         _tools = tools;
         _diagnostics = diagnostics;
         ApplyConcurrency();
+        // A new yt-dlp can build what the old one couldn't: drop the negative
+        // cache so those trailers are retried immediately, not after its TTL.
+        _ytDlp.Updated += () =>
+        {
+            var cleared = ClearNegativeCache();
+            if (cleared > 0)
+            {
+                _logger.LogInformation("[YouTubeTrailers] yt-dlp updated — cleared {Count} failed trailer(s) for retry", cleared);
+            }
+        };
         if (Plugin.Instance is not null)
         {
             // Resize the build pool the moment settings are saved, so changing
@@ -110,6 +120,9 @@ public sealed class TrailerResolver
     }
 
     public static bool IsValidVideoId(string videoId) => VideoIdPattern.IsMatch(videoId);
+
+    /// <summary>ffmpeg's AVERROR_HTTP_FORBIDDEN (FFERRTAG 0xF8,'4','0','3') as a process exit code.</summary>
+    private const int AvErrorHttpForbidden = -858797304;
 
     public int MaxConcurrentBuilds =>
         Math.Clamp(Config?.MaxConcurrentBuilds ?? 4, 1, MaxPossibleBuilds);
@@ -716,6 +729,15 @@ public sealed class TrailerResolver
                         : $"yt-dlp returned {resolved.Urls.Length} URLs; expected 1 or 2.";
                 FailJob(job, JobPhases.Resolving, reason, resolved.Exit,
                     ToolRunner.TailLines(resolved.Stderr), resolved.Command);
+                // A stale yt-dlp fails in many shapes ("Precondition check
+                // failed", "The page needs to be reloaded", no formats, ...),
+                // so any non-timeout resolve failure counts. A false alarm
+                // costs one version check an hour; only a newer release
+                // downloads anything.
+                if (!resolved.TimedOut)
+                {
+                    _ytDlp.ReportStaleSignal("yt-dlp resolve failures");
+                }
                 return false;
             }
 
@@ -1124,6 +1146,16 @@ public sealed class TrailerResolver
                             videoId);
                     }
                     FailJob(job, JobPhases.Building, reason, process.ExitCode, tail, command);
+                    // googlevideo refusing the URLs yt-dlp resolved is the
+                    // classic stale-yt-dlp symptom. Windows reports ffmpeg's
+                    // AVERROR_HTTP_FORBIDDEN as the full exit code; POSIX
+                    // truncates it, so stderr is the portable signal.
+                    if (!job.WatchdogKilled
+                        && (process.ExitCode == AvErrorHttpForbidden
+                            || stderr.ToString().Contains("403 Forbidden", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        _ytDlp.ReportStaleSignal("HTTP 403 from YouTube");
+                    }
                 }
                 else
                 {

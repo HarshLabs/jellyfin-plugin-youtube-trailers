@@ -122,9 +122,14 @@ today. `scripts/update-manifest.py` writes the manifest entries (rather than
 
 On a fresh install the plugin fetches the correct yt-dlp build from the
 [official yt-dlp releases](https://github.com/yt-dlp/yt-dlp/releases) into its
-data folder and uses it automatically. The config page shows the detected
-version and has a **Download / update yt-dlp now** button — handy because
-YouTube changes periodically break older yt-dlp builds. To use a system-managed
+data folder and uses it automatically. Because YouTube changes periodically
+break older yt-dlp builds, the plugin also keeps it current on its own: it
+checks for a newer release at server start and daily at 2 AM (the **Update
+yt-dlp** scheduled task), and updates immediately when several builds fail in
+a row the way a stale yt-dlp does (HTTP 403 from YouTube or resolve errors) —
+at most once an hour, and only when a newer release exists. A download is
+validated before it replaces the working copy. The config page shows the
+detected version and has a **Download / update yt-dlp now** button. To use a system-managed
 yt-dlp instead (e.g. installed via your package manager), set its absolute path
 in **yt-dlp path** and it takes precedence over the managed copy. Auto-management
 can be turned off with the **Manage yt-dlp automatically** toggle.
