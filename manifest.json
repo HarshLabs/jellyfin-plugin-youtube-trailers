@@ -9,6 +9,22 @@
         "imageUrl": "https://raw.githubusercontent.com/HarshLabs/jellyfin-plugin-youtube-trailers/main/assets/icon.png",
         "versions": [
             {
+                "version": "1.2.4.0",
+                "changelog": "Trailers no longer stop working when YouTube changes. YouTube periodically breaks older yt-dlp builds, and the plugin previously never updated its yt-dlp after the first download \u2014 so over time every trailer failed (HTTP 403 / \"ffmpeg exited -858797304\") until an admin pressed \"Download / update yt-dlp\". The plugin now keeps yt-dlp current on its own: it checks for a newer release at server start and daily at 2 AM (new \"Update yt-dlp\" scheduled task), and updates immediately when several trailer builds fail the way a stale yt-dlp does \u2014 at most once an hour, and only when a newer release exists. Trailers that failed are retried right after an update. New downloads are verified before they replace the working copy, so an update can never leave the server without yt-dlp. No change when you pin your own yt-dlp path or turn off automatic management. Supports Jellyfin 10.11 and 12.\n",
+                "targetAbi": "12.0.0.0",
+                "sourceUrl": "https://github.com/HarshLabs/jellyfin-plugin-youtube-trailers/releases/download/v1.2.4.0/youtube-trailers_1.2.4.0_jf12.zip",
+                "checksum": "4f0044ba1ca5601c2150349100ca5cbe",
+                "timestamp": "2026-09-27T16:07:23Z"
+            },
+            {
+                "version": "1.2.4.0",
+                "changelog": "Trailers no longer stop working when YouTube changes. YouTube periodically breaks older yt-dlp builds, and the plugin previously never updated its yt-dlp after the first download \u2014 so over time every trailer failed (HTTP 403 / \"ffmpeg exited -858797304\") until an admin pressed \"Download / update yt-dlp\". The plugin now keeps yt-dlp current on its own: it checks for a newer release at server start and daily at 2 AM (new \"Update yt-dlp\" scheduled task), and updates immediately when several trailer builds fail the way a stale yt-dlp does \u2014 at most once an hour, and only when a newer release exists. Trailers that failed are retried right after an update. New downloads are verified before they replace the working copy, so an update can never leave the server without yt-dlp. No change when you pin your own yt-dlp path or turn off automatic management. Supports Jellyfin 10.11 and 12.\n",
+                "targetAbi": "10.11.0.0",
+                "sourceUrl": "https://github.com/HarshLabs/jellyfin-plugin-youtube-trailers/releases/download/v1.2.4.0/youtube-trailers_1.2.4.0_jf10.11.zip",
+                "checksum": "a7dca828e39e4fac092447ac88f5599e",
+                "timestamp": "2026-09-27T16:07:23Z"
+            },
+            {
                 "version": "1.2.3.2",
                 "changelog": "Hardens the fallback-CDN retry from v1.2.3.1 based on a full code review: failed builds are now always recorded (history, diagnostics with ffmpeg stderr, negative cache) before the fallback rebuild is scheduled, so clients fast-fail instead of hanging and the dashboard shows every kill; the rebuild is spawned race-free after job eviction and covers fast-exit edge failures (immediate 403/refused), not just watchdog kills; fallback markers are self-pruning and cleared by the admin retry action; DNS probes are cancellable and deduplicated; log lines report the actual swapped host. No behavior change for healthy builds. Supports Jellyfin 10.11 and 12.\n",
                 "targetAbi": "12.0.0.0",
