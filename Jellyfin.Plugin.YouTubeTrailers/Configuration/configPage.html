@@ -852,6 +852,14 @@
                         </div>
                         <input id="CompleteWaitSeconds" type="number" class="ytt-input" min="0" max="60" />
                     </div>
+
+                    <div class="ytt-form-row">
+                        <div class="ytt-label">
+                            <span class="ytt-label-name">Safe start wait (seconds)</span>
+                            <span class="ytt-label-help">How long a full-screen request waits for a trailer that is still building until it can play to the end without pausing (based on the trailer's length and the measured build speed). On timeout playback starts anyway and may pause to buffer.</span>
+                        </div>
+                        <input id="SafeStartWaitSeconds" type="number" class="ytt-input" min="0" max="60" />
+                    </div>
                 </div>
 
                 <div class="ytt-card">
@@ -1747,7 +1755,7 @@
                        'QualityPreset', 'CookiesFromBrowser', 'CookiesFile'];
     var NUM_FIELDS  = ['ResolveTimeoutSeconds', 'MaxConcurrentBuilds', 'MaxAgeDays', 'MaxCacheGigabytes',
                        'LibraryAddDelaySeconds', 'MaxPrewarmPerRun', 'FailureCacheMinutes',
-                       'NoSegmentTimeoutSeconds', 'CompleteWaitSeconds'];
+                       'NoSegmentTimeoutSeconds', 'CompleteWaitSeconds', 'SafeStartWaitSeconds'];
     var FLOAT_FIELDS = ['BuildSpeedLimit'];
 
     function loadConfig() {

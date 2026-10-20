@@ -842,6 +842,92 @@ public sealed class TrailerResolver
     }
 
     /// <summary>
+    /// Waits (bounded) until a still-building trailer is safe to start from the
+    /// beginning: playing it can't overtake the build before the end
+    /// (<see cref="IsSafeToStart"/>). Returns true when finished or safe; false when the
+    /// wait ran out, the job died, or the job is gone (the caller serves what exists).
+    /// </summary>
+    public async Task<bool> WaitForSafeStartAsync(string videoId, int? requestedSeconds, CancellationToken cancellationToken)
+    {
+        var capMs = Math.Clamp(requestedSeconds ?? Config?.SafeStartWaitSeconds ?? 15, 0, 60) * 1000;
+        var sw = Stopwatch.StartNew();
+        while (true)
+        {
+            if (IsComplete(videoId))
+            {
+                return true;
+            }
+            if (!_jobs.TryGetValue(videoId, out var job) || job.Failed || job.IsFinished)
+            {
+                return IsComplete(videoId);
+            }
+            var built = Interlocked.Read(ref job.OutTimeUs) / 1_000_000d;
+            var elapsed = job.BuildStartedUtc is { } started ? (DateTime.UtcNow - started).TotalSeconds : 0;
+            if (IsSafeToStart(built, job.DurationSeconds, elapsed))
+            {
+                _logger.LogInformation("[YouTubeTrailers] Safe to start {VideoId} after {Waited}ms (built {Built:F1}s of {Duration}s in {Elapsed:F1}s)",
+                    videoId, sw.ElapsedMilliseconds, built, job.DurationSeconds?.ToString("F1", CultureInfo.InvariantCulture) ?? "?", elapsed);
+                return true;
+            }
+            if (sw.ElapsedMilliseconds >= capMs)
+            {
+                _logger.LogInformation("[YouTubeTrailers] Not yet safe to start {VideoId} after {Waited}ms (built {Built:F1}s of {Duration}s in {Elapsed:F1}s); serving the live playlist",
+                    videoId, sw.ElapsedMilliseconds, built, job.DurationSeconds?.ToString("F1", CultureInfo.InvariantCulture) ?? "?", elapsed);
+                return false;
+            }
+            await Task.Delay(250, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Whether playback from 0 at real-time speed stays at least a margin behind a build
+    /// that has <paramref name="built"/> of <paramref name="duration"/> seconds after
+    /// <paramref name="elapsed"/> seconds. The build rate is the average so far, discounted
+    /// for jitter. A build at least as fast as playback only needs the margin built; a
+    /// slower one must finish before playback reaches its last margin. Unknown length:
+    /// only a build clearly faster than real time is safe.
+    /// </summary>
+    internal static bool IsSafeToStart(double built, double? duration, double elapsed)
+    {
+        const double margin = 4, discount = 0.85, settle = 3;
+        if (elapsed < settle || built < margin)
+        {
+            return false;
+        }
+        var rate = built / elapsed * discount;
+        if (duration is not > 0)
+        {
+            return rate >= 1.2;
+        }
+        if (built >= duration.Value - 0.5 || rate >= 1)
+        {
+            return true;
+        }
+        // Gap between the build and playback shrinks at (1 - rate): the build must
+        // reach the end while playback is still a margin short of it.
+        return (duration.Value - built) / rate <= duration.Value - margin;
+    }
+
+    /// <summary>
+    /// A still-live (EVENT) playlist starts players at its live edge, skipping the
+    /// trailer's opening seconds. EXT-X-START pins the start to the beginning (RFC 8216
+    /// §4.3.5.2). Finished playlists are VOD and already start at 0.
+    /// </summary>
+    public static string PinStartToBeginning(string playlist)
+    {
+        if (playlist.Contains("#EXT-X-ENDLIST", StringComparison.Ordinal)
+            || playlist.Contains("#EXT-X-START", StringComparison.Ordinal)
+            || !playlist.StartsWith("#EXTM3U", StringComparison.Ordinal))
+        {
+            return playlist;
+        }
+        var newline = playlist.IndexOf('\n');
+        return newline < 0
+            ? playlist + "\n#EXT-X-START:TIME-OFFSET=0,PRECISE=YES\n"
+            : playlist.Insert(newline + 1, "#EXT-X-START:TIME-OFFSET=0,PRECISE=YES\n");
+    }
+
+    /// <summary>
     /// Once the bundle is finished (ENDLIST present), marks the playlist VOD
     /// instead of EVENT so AVKit renders a normal seek bar rather than the
     /// live-stream UI (red "LIVE" badge + wall-clock). No-op while still live.

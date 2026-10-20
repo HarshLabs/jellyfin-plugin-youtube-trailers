@@ -213,6 +213,16 @@ public class PluginConfiguration : BasePluginConfiguration
     public int CompleteWaitSeconds { get; set; } = 3;
 
     /// <summary>
+    /// Longest a full-screen (<c>?complete=1</c>) request waits for a trailer that is
+    /// still building to become safe to start: what is built, plus the measured build
+    /// speed, must stay ahead of playback all the way to the end, so the player never
+    /// catches up and stalls. Past this, playback starts anyway (it may pause to
+    /// buffer). A client can ask for a different wait with <c>?startWait=</c> (0-60).
+    /// Kept under 20 s by default, the startup deadline of older JellySee builds.
+    /// </summary>
+    public int SafeStartWaitSeconds { get; set; } = 15;
+
+    /// <summary>
     /// Logs the full yt-dlp / ffmpeg command line for every invocation at Info
     /// level. Noisy, but it's the fastest way to see exactly what the plugin ran
     /// when a trailer misbehaves on a specific server.

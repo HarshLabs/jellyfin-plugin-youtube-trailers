@@ -14,7 +14,10 @@ server fixes all of that:
 - **`yt-dlp`** resolves the best adaptive streams (far more robust than any
   on-device extractor, updated within hours of YouTube changes).
 - **`ffmpeg`** stream-copies them into an AVPlayer-native fMP4 **HLS** bundle
-  (no re-encode). A live event playlist means fast time-to-first-frame.
+  (no re-encode). A live event playlist means fast time-to-first-frame; a
+  full-screen request is held only until the trailer can play from its first
+  frame to its end without pausing (from its length and the measured build
+  speed), and players always start it at the beginning.
 - The client only ever talks to your Jellyfin server, so there's no
   IP-binding / expiry — and the Apple TV pays no extraction CPU.
 
@@ -154,7 +157,7 @@ Dashboard → Plugins → **YouTube Trailers**:
   resolution and the ffmpeg fetch), **cookies** from a browser profile or a
   `cookies.txt` file, a **build speed limit**, **extra yt-dlp arguments**,
   **max concurrent builds** (with this server's core count shown), **resolve
-  timeout**, and the **VOD grace** window.
+  timeout**, the **VOD grace** window and the **safe start wait**.
 
 > **Cookies matter.** "Sign in to confirm you're not a bot" is the single most
 > common reason extraction fails, and cookies are always the fix. The browser

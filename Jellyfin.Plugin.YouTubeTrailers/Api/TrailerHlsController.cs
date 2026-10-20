@@ -74,7 +74,7 @@ public sealed class TrailerHlsController : ControllerBase
     [HttpHead("{videoId}/main.m3u8")]
     [Produces("application/vnd.apple.mpegurl")]
     public async Task<IActionResult> GetPlaylist(
-        [FromRoute] string videoId, [FromQuery] bool complete, CancellationToken cancellationToken)
+        [FromRoute] string videoId, [FromQuery] bool complete, [FromQuery] int? startWait, CancellationToken cancellationToken)
     {
         _logger.LogInformation("[YouTubeTrailers] main.m3u8 {Method} for {VideoId} | UA='{UA}'",
             Request.Method, videoId, Request.Headers.UserAgent.ToString());
@@ -100,9 +100,12 @@ public sealed class TrailerHlsController : ControllerBase
         // scrubber) instead of AVKit's live UI. Wait (bounded) for the remux to
         // finish; on timeout fall through and serve the still-live playlist so a
         // slow trailer still plays (it just shows the live UI as before).
-        if (complete)
+        // Still building after the grace: hold the live playlist until playback from the
+        // start can't overtake the build (or the wait ends), so the player never starts
+        // a trailer it will have to pause.
+        if (complete && !await _resolver.WaitForCompleteAsync(videoId, cancellationToken).ConfigureAwait(false))
         {
-            await _resolver.WaitForCompleteAsync(videoId, cancellationToken).ConfigureAwait(false);
+            await _resolver.WaitForSafeStartAsync(videoId, startWait, cancellationToken).ConfigureAwait(false);
         }
 
         // Serving the playlist is the one unambiguous "this trailer was played"
@@ -113,6 +116,7 @@ public sealed class TrailerHlsController : ControllerBase
         var playlist = await System.IO.File.ReadAllTextAsync(_resolver.PlaylistPath(videoId), cancellationToken)
             .ConfigureAwait(false);
         playlist = TrailerResolver.FinalizePlaylistType(playlist);
+        playlist = TrailerResolver.PinStartToBeginning(playlist);
         playlist = TrailerResolver.InjectAuth(playlist, ExtractToken(Request));
 
         Response.Headers["Cache-Control"] = "no-store, max-age=0";
