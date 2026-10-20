@@ -14,7 +14,9 @@ server fixes all of that:
 - **`yt-dlp`** resolves the best adaptive streams (far more robust than any
   on-device extractor, updated within hours of YouTube changes).
 - **`ffmpeg`** stream-copies them into an AVPlayer-native fMP4 **HLS** bundle
-  (no re-encode). A live event playlist means fast time-to-first-frame; a
+  (no re-encode), downloading in byte ranges so YouTube's per-connection
+  throttling doesn't hold builds to playback speed. A live event playlist means
+  fast time-to-first-frame; a
   full-screen request is held only until the trailer can play from its first
   frame to its end without pausing (from its length and the measured build
   speed), and players always start it at the beginning.

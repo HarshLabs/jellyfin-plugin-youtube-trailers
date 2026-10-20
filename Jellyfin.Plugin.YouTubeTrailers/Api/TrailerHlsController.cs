@@ -103,7 +103,10 @@ public sealed class TrailerHlsController : ControllerBase
         // Still building after the grace: hold the live playlist until playback from the
         // start can't overtake the build (or the wait ends), so the player never starts
         // a trailer it will have to pause.
-        if (complete && !await _resolver.WaitForCompleteAsync(videoId, cancellationToken).ConfigureAwait(false))
+        // HEAD is an availability check (clients probe before choosing a source): it never
+        // waits for completion or a safe start, only the playable bundle above.
+        if (complete && !HttpMethods.IsHead(Request.Method)
+            && !await _resolver.WaitForCompleteAsync(videoId, cancellationToken).ConfigureAwait(false))
         {
             await _resolver.WaitForSafeStartAsync(videoId, startWait, cancellationToken).ConfigureAwait(false);
         }

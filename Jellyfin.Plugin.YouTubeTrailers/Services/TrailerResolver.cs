@@ -1041,8 +1041,21 @@ public sealed class TrailerResolver
         psi.ArgumentList.Add("-progress");
         psi.ArgumentList.Add("pipe:1");
         psi.ArgumentList.Add("-y");
+        var ranged = SupportsRangedRequests(ffmpeg);
         foreach (var url in urls)
         {
+            // YouTube throttles one long request to about playback speed (a 135 s
+            // trailer took 72 s to fetch, so builds ran at ~0.8x and playback caught
+            // up); byte-range requests are served at full speed (the same trailer in
+            // 3 s), which is what yt-dlp's own --http-chunk-size does. Only where this
+            // ffmpeg's http protocol has the options (FFmpeg 7.1+).
+            if (ranged)
+            {
+                psi.ArgumentList.Add("-request_size");
+                psi.ArgumentList.Add("10485760");
+                psi.ArgumentList.Add("-multiple_requests");
+                psi.ArgumentList.Add("1");
+            }
             // Resilience for servers with a flaky/slow path to googlevideo
             // (connection timeouts surface as ffmpeg ETIMEDOUT, e.g. -138 on
             // Windows): reconnect on network errors and mid-stream drops instead
@@ -1454,6 +1467,52 @@ public sealed class TrailerResolver
         }
         return true;
     }
+
+    private static readonly ConcurrentDictionary<string, bool> RangedRequestSupport = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Whether this ffmpeg's http protocol accepts <c>-request_size</c> (byte-range
+    /// requests), asked once per ffmpeg path from <c>-h protocol=http</c>. An ffmpeg
+    /// without it would refuse the option and fail every build, so unknown means no.
+    /// </summary>
+    private bool SupportsRangedRequests(string ffmpeg) => RangedRequestSupport.GetOrAdd(ffmpeg, path =>
+    {
+        try
+        {
+            var probe = new ProcessStartInfo
+            {
+                FileName = path,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+            probe.ArgumentList.Add("-hide_banner");
+            probe.ArgumentList.Add("-h");
+            probe.ArgumentList.Add("protocol=http");
+            using var process = Process.Start(probe);
+            if (process is null)
+            {
+                return false;
+            }
+            var stderr = process.StandardError.ReadToEndAsync();
+            var output = process.StandardOutput.ReadToEnd();
+            if (!process.WaitForExit(5_000))
+            {
+                try { process.Kill(); } catch { /* already gone */ }
+                return false;
+            }
+            var supported = output.Contains("request_size", StringComparison.Ordinal)
+                || stderr.Result.Contains("request_size", StringComparison.Ordinal);
+            _logger.LogInformation("[YouTubeTrailers] ffmpeg ranged requests {State} ({Path})", supported ? "enabled" : "unavailable", path);
+            return supported;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[YouTubeTrailers] Could not probe ffmpeg http options ({Path})", path);
+            return false;
+        }
+    });
 
     /// <summary>
     /// Structural pre-check for the build monitor: true when at least one URL
