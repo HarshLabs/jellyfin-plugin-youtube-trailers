@@ -9,6 +9,22 @@
         "imageUrl": "https://raw.githubusercontent.com/HarshLabs/jellyfin-plugin-youtube-trailers/main/assets/icon.png",
         "versions": [
             {
+                "version": "1.2.5.0",
+                "changelog": "Trailers that aren't cached yet now start at their first frame and only once they can play to the end without pausing. Previously a trailer still being prepared was served as a live stream after 3 seconds: players joined it partway in (skipping the opening seconds), and on servers that prepare trailers slower than real time playback caught up and froze. The plugin now waits until the trailer's length and the measured preparation speed guarantee smooth playback (new \"Safe start wait\" setting, 15 seconds by default; JellySee asks for up to 50), and always starts players at the beginning. Cached trailers are unchanged. Supports Jellyfin 10.11 and 12.\n",
+                "targetAbi": "12.0.0.0",
+                "sourceUrl": "https://github.com/HarshLabs/jellyfin-plugin-youtube-trailers/releases/download/v1.2.5.0/youtube-trailers_1.2.5.0_jf12.zip",
+                "checksum": "6734a48f0abf5b02619a68d69217586a",
+                "timestamp": "2026-10-20T01:12:08Z"
+            },
+            {
+                "version": "1.2.5.0",
+                "changelog": "Trailers that aren't cached yet now start at their first frame and only once they can play to the end without pausing. Previously a trailer still being prepared was served as a live stream after 3 seconds: players joined it partway in (skipping the opening seconds), and on servers that prepare trailers slower than real time playback caught up and froze. The plugin now waits until the trailer's length and the measured preparation speed guarantee smooth playback (new \"Safe start wait\" setting, 15 seconds by default; JellySee asks for up to 50), and always starts players at the beginning. Cached trailers are unchanged. Supports Jellyfin 10.11 and 12.\n",
+                "targetAbi": "10.11.0.0",
+                "sourceUrl": "https://github.com/HarshLabs/jellyfin-plugin-youtube-trailers/releases/download/v1.2.5.0/youtube-trailers_1.2.5.0_jf10.11.zip",
+                "checksum": "a02d287367d93e522a63fa9900df0551",
+                "timestamp": "2026-10-20T01:12:08Z"
+            },
+            {
                 "version": "1.2.4.0",
                 "changelog": "Trailers no longer stop working when YouTube changes. YouTube periodically breaks older yt-dlp builds, and the plugin previously never updated its yt-dlp after the first download \u2014 so over time every trailer failed (HTTP 403 / \"ffmpeg exited -858797304\") until an admin pressed \"Download / update yt-dlp\". The plugin now keeps yt-dlp current on its own: it checks for a newer release at server start and daily at 2 AM (new \"Update yt-dlp\" scheduled task), and updates immediately when several trailer builds fail the way a stale yt-dlp does \u2014 at most once an hour, and only when a newer release exists. Trailers that failed are retried right after an update. New downloads are verified before they replace the working copy, so an update can never leave the server without yt-dlp. No change when you pin your own yt-dlp path or turn off automatic management. Supports Jellyfin 10.11 and 12.\n",
                 "targetAbi": "12.0.0.0",
